@@ -1,0 +1,2 @@
+[alias]
+docgen = "rustdoc --lib --target-dir doc/gen"
