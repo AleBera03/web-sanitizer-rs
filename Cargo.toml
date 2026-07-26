@@ -3,4 +3,26 @@ name = "web-sanitizer-rs"
 version = "0.1.0"
 edition = "2024"
 
+[lib]
+name = "web_sanitizer"
+path = "src/lib.rs"
+
+[[bin]]
+name = "wsrs"
+path = "src/main.rs"
+
 [dependencies]
+clap = { version = "4", features = ["derive"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+toml = "0.9"
+url = "2"
+lol_html = "2"
+idna = "1.1.0"
+unicode-security = "0.1"
+thiserror = "2"
+anyhow = "1.0"
+jiff = "0.2.35"
+
+[dev-dependencies]
+tempfile = "3"
