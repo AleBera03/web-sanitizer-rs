@@ -1,0 +1,26 @@
+[book]
+title = "Final Report"
+authors = ["AleBera03"]
+language = "en"
+src = "src"
+
+[build]
+build-dir = "book"
+
+[output.html]
+preferred-dark-theme = "light"
+additional-js = ["mermaid.min.js", "mermaid-init.js"]
+
+[preprocessor.mermaid]
+command = "mdbook-mermaid"
+
+[output.html.playground]
+editable = true
+line-numbers = true
+
+[output.pdf]
+enable = true
+print-background = true
+display-header-footer = true
+header-template = "<div></div>"
+footer-template = "<div></div>"

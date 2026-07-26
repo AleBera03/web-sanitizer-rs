@@ -2,6 +2,7 @@
 name = "web-sanitizer-rs"
 version = "0.1.0"
 edition = "2024"
+exclude = ["final_report/"]
 
 [lib]
 name = "web_sanitizer"

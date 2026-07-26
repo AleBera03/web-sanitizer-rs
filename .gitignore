@@ -3,3 +3,10 @@
 doc/requirements
 doc/spec
 doc/gen
+
+final_report/.venv
+final_report/.xdg
+final_report/build
+
+# MyST build outputs
+_build
