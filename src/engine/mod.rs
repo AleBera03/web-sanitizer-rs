@@ -101,9 +101,8 @@ impl Engine {
         &self.blockset
     }
 
-    /// Process a single input. Never panics: the pipeline runs under
+    /// process a single input. Never panics: the pipeline runs under
     /// `catch_unwind`, so a logic bug degrades to an `internal_error` report
-    /// (EC-4) instead of killing the caller.
     pub fn process(&self, input: InputSource) -> Outcome {
         let source = input.describe();
         let start = Instant::now();
@@ -124,9 +123,9 @@ impl Engine {
         outcome
     }
 
-    /// Process a batch sequentially (worker pool arrives in step 10), calling
+    /// Process a batch sequentially for now, calling
     /// `emit` with each finished report and its output bytes in input order.
-    /// The report's `id` is `input-N` by position (AC-4 ordering).
+    /// The report's `id` is `input-N` by position.
     pub fn process_batch<F>(&self, inputs: Vec<InputSource>, jobs: usize, mut emit: F) -> RunReport
     where
         F: FnMut(&InputReport, Option<&[u8]>),
@@ -160,8 +159,7 @@ impl Engine {
                 };
             }
         };
-        // Input-bytes budget (TC-8): at the budget passes, one byte over
-        // refuses (EC-3).
+        // input-bytes budget
         let budget = self.policy.budgets.max_input_bytes;
         if data.len() as u64 > budget {
             return Outcome {
@@ -173,7 +171,7 @@ impl Engine {
                 sanitized: None,
             };
         }
-        // Sniff / route / sanitise: steps 5–8. Pass-through for now.
+        // Stub for now
         let bytes_in = data.len() as u64;
         let output = data;
         Outcome {
@@ -268,7 +266,7 @@ mod tests {
 
     #[test]
     fn empty_input_is_clean_with_zero_actions() {
-        // EC-1: 0-byte input processes successfully.
+        // 0-byte input processes successfully.
         let outcome = engine().process(bytes(b""));
         assert_eq!(outcome.report.status, InputStatus::Clean);
         assert_eq!(outcome.report.bytes_in, 0);
@@ -315,7 +313,7 @@ mod tests {
         fs::write(&path, b"x").unwrap();
         fs::set_permissions(&path, fs::Permissions::from_mode(0o000)).unwrap();
         if fs::read(&path).is_ok() {
-            return; // running as root: EACCES is not observable, nothing to test
+            return;
         }
         let outcome = engine().process(InputSource::File(path));
         assert_eq!(outcome.report.status, InputStatus::IoError);
@@ -323,7 +321,7 @@ mod tests {
 
     #[test]
     fn non_http_scheme_is_rejected_without_fetch() {
-        // AC-3: file:// and friends never reach the fetcher.
+        // file:// and friends never reach the fetcher.
         let url = url::Url::parse("file:///etc/passwd").unwrap();
         let outcome = engine().process(InputSource::Url(url));
         assert_eq!(outcome.report.status, InputStatus::UnsupportedScheme);
@@ -346,7 +344,7 @@ mod tests {
 
     #[test]
     fn batch_preserves_order_assigns_ids_and_counts() {
-        // AC-4 ordering (sequential today; the pool must keep this property).
+        // ordering (sequential today; the pool must keep this property).
         let engine = engine_with_budget(4);
         let inputs = vec![bytes(b"ok"), bytes(b"toolong"), bytes(b"ok2")];
         let mut emitted = Vec::new();
@@ -368,7 +366,7 @@ mod tests {
                 ("input-2".to_string(), true),
             ]
         );
-        assert_eq!(report.exit_code(), 1); // one refused input → exit 1 (AC-20)
+        assert_eq!(report.exit_code(), 1); // one refused input --> exit 1
     }
 
     #[test]
