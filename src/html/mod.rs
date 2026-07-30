@@ -18,6 +18,7 @@
 //! or non-UTF-8 input degrades gracefully instead of panicking.
 //!
 //!
+//!
 //! URL block-list / homograph inspection runs on the URL-bearing attributes of surviving elements
 //! and delegates classification to [`crate::urlcheck::UrlChecker`], mapping the
 //! verdict to the URL policy action:
@@ -447,12 +448,7 @@ mod tests {
 
     /// A URL checker that never fires: empty block-list, no protected domains.
     fn no_url_checker() -> UrlChecker<'static> {
-        UrlChecker::new(
-            &EMPTY_BLOCKSET,
-            &EMPTY_SKELETONSET,
-            &DEFAULT_VERDICTCACHE,
-            &DEFAULT_RULES,
-        )
+        UrlChecker::new(&EMPTY_BLOCKSET, &EMPTY_SKELETONSET, &DEFAULT_RULES)
     }
 
     fn run(html: &str) -> HtmlOutcome {
