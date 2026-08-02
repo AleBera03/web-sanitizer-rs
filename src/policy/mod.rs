@@ -11,6 +11,7 @@ pub mod protectedset;
 use std::fmt;
 use std::fs;
 use std::io;
+use std::ops::Sub;
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
@@ -81,7 +82,7 @@ impl Default for HtmlRules {
             action_dangerous_scheme: Action::Rewrite,
             action_frame: Action::Placeholder,
             action_meta_refresh: Action::Remove,
-            placeholder_frame: "<div class=\"sanitized-placeholder\"></div>".to_string(),
+            placeholder_frame: "<div class=\"sanitized-placeholder\"></div>".to_string(),,
         }
     }
 }
@@ -172,6 +173,45 @@ impl Default for InputRules {
     fn default() -> Self {
         InputRules {
             extensions: vec!["html".to_string(), "htm".to_string()],
+        }
+    }
+}
+
+/// Sniff rules for subresources
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum SniffRule {
+    /// Reject subresources that do not match declared MIME type
+    Reject,
+    /// Replace extension of subresources that do not match declared MIME type
+    Rewrite,
+}
+
+/// Active content rules for subresources
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ActiveContentRule {
+    /// Reject subresources that contain active content
+    Reject,
+    /// CDR - remove active content from the resource, if possible, otherwise reject
+    Rewrite,
+    /// Flag subresources that contain active content, but do not reject them
+    Flag,
+}
+
+/// Subresources handling rules
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct SubresourcesRules {
+    pub fetch_subresources: bool,
+    pub sniff_rule: SniffRule,
+    pub active_content_rule: ActiveContentRule,
+}
+
+impl Default for SubresourcesRules {
+    fn default() -> Self {
+        SubresourcesRules {
+            fetch_subresources: false,
+            sniff_rule: SniffRule::Reject,
+            active_content_rule: ActiveContentRule::Reject,
         }
     }
 }

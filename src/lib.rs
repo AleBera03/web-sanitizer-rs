@@ -16,3 +16,5 @@ pub use engine::{Engine, Outcome};
 pub use html::{HtmlOutcome, sanitize_html};
 pub use policy::Policy;
 pub use report::{InputReport, RunReport};
+pub use scan::{ScanOutcome, scan_active_content};
+pub use sniff::{AcquiredInput, SniffOutcome, sniff_input};
