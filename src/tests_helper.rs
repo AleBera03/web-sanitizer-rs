@@ -25,11 +25,11 @@ pub mod set_from {
     impl SetFrom<SkeletonSet> for SkeletonSet {
         fn set_from_text(text: &str) -> SkeletonSet {
             let protected: Vec<&str> = text.lines().collect();
-            SkeletonSet::build(&protected).unwrap()
+            SkeletonSet::build(protected).unwrap()
         }
         fn set_from_list(list: &[&str]) -> SkeletonSet {
-            SkeletonSet::build(list).unwrap()
+            let v: Vec<&str> = list.to_vec();
+            SkeletonSet::build(v).unwrap()
         }
     }
-
 }

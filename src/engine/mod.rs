@@ -6,21 +6,21 @@
 //! - **what the server declares**: header `Content-Type: image/png`
 //! - **file name**: extension `.png`
 //! - **actual byte analysis**: studying of file content
-//! 
+//!
 //! _Sniffing_: retrieving a file type analyzing the actual byte content
-//! 
+//!
 //! _MIME confusion_: the final goal of an attacker is forcing 2 consumers to
 //! _differently understand_ the same byte stream.
-//! 
+//!
 //! Therefore, _sniffer_ compares a table of possible kinds of MIME content type with initial
 //! bytes of a fetched file.
-//! 
+//!
 //! ## `route`
 //! After `sniff` phase, `route` dispatch handler for each kind of content, under which
 //! limits. Let's see possibilites:
 //! - html --> [`crate::html::sanitize_html`]
 //! - xml/svg --> [entity scan](https://en.wikipedia.org/wiki/Billion_laughs_attack). xml and svg are
-//! given near because svg is just an xml file
+//!   given near because svg is just an xml file
 //! - scan, image --> header-only dimensions
 //! - gzip --> bounded inflate then re-sniff
 //! - everything else --> byte-identical pass-through
@@ -44,15 +44,15 @@
 //! - acquire
 //! - input-bytes budget
 //! - some of panic isolation
-//! 
+//!
 //! ### Missing
 //! - sniff and route within pipeline
 //! - integration of [`crate::html::sanitize_html`]
 //! - the worker pool that will replace the sequential loop in
-//! [`Engine::process_batch`] behind the same signature
+//!   [`Engine::process_batch`] behind the same signature
 
-pub mod sniff;
 pub mod route;
+pub mod sniff;
 
 use std::fs;
 use std::panic::{AssertUnwindSafe, catch_unwind};
@@ -63,12 +63,17 @@ use jiff::Zoned;
 
 use crate::fetch::Fetcher;
 use crate::input::InputSource;
+use crate::policy::protectedset::SkeletonSet;
 use crate::policy::{ConfigError, Policy, blockset::BlockSet};
 use crate::report::{InputReport, InputStatus, RunReport};
 
+#[allow(dead_code, reason=
+    "waiting for completation of entire engine
+    pipeline to call sanitize_html")]
 pub struct Engine {
     policy: Arc<Policy>,
     blockset: BlockSet,
+    skeletonset: SkeletonSet,
     fetcher: Arc<dyn Fetcher>,
 }
 
@@ -86,9 +91,18 @@ impl Engine {
     /// (exit 2) before any input is touched.
     pub fn new(policy: Policy, fetcher: Arc<dyn Fetcher>) -> Result<Engine, ConfigError> {
         let blockset = BlockSet::from_files(&policy.urls.blocklists)?;
+        let skeletonset = SkeletonSet::build(
+            policy
+                .urls
+                .protected_domains
+                .iter()
+                .map(|s| s.as_str())
+                .collect(),
+        )?;
         Ok(Engine {
             policy: Arc::new(policy),
             blockset,
+            skeletonset,
             fetcher,
         })
     }
@@ -218,12 +232,12 @@ impl Engine {
                     .fetch(&url, &self.policy.fetch)
                     .map(|fetched| fetched.body)
                     .map_err(|e| (InputStatus::FetchError, e.to_string()))
-            },
+            }
             InputSource::MalformedUrl(s) => {
-                return Err((
+                Err((
                     InputStatus::MalformedUrl,
                     format!("url `{}` does not respect WHATWG standards", s),
-                ));
+                ))
             }
         }
     }
@@ -383,12 +397,16 @@ mod tests {
     fn good_blocklist_is_compiled_at_startup() {
         let dir = tempfile::tempdir().unwrap();
         let list = dir.path().join("list.txt");
-        fs::write(&list, "evil.com\n0.0.0.0 ads.example\n").unwrap();
+        fs::write(&list, "0.0.0.0 evil.com\n0.0.0.0 ads.example\n").unwrap();
 
         let mut policy = Policy::builtin();
         policy.urls.blocklists = vec![list];
         let engine = Engine::new(policy, Arc::new(DisabledFetcher)).unwrap();
-        assert!(engine.blockset().contains("sub.evil.com"));
+        assert!(
+            engine
+                .blockset()
+                .contains(url::Host::parse("sub.evil.com").unwrap())
+        );
         assert_eq!(engine.blockset().len(), 2);
     }
 }

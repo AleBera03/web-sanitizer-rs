@@ -1,6 +1,6 @@
 //! web-sanitizer library crate: all re-exports
 //!
-//! The binary front-ends (CLI batch mode, HTTP server mode) call 
+//! The binary front-ends (CLI batch mode, HTTP server mode) call
 //! [`Engine::process`] and [`Engine::process_batch`]
 
 pub mod engine;
@@ -9,8 +9,8 @@ pub mod html;
 pub mod input;
 pub mod policy;
 pub mod report;
-pub mod urlcheck;
 pub mod tests_helper;
+pub mod urlcheck;
 
 pub use engine::{Engine, Outcome};
 pub use html::{HtmlOutcome, sanitize_html};

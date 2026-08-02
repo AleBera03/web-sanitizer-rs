@@ -81,7 +81,7 @@ impl Default for HtmlRules {
             action_dangerous_scheme: Action::Rewrite,
             action_frame: Action::Placeholder,
             action_meta_refresh: Action::Remove,
-            placeholder_frame: "<div class=\"sanitized-placeholder\"></div>".to_string()
+            placeholder_frame: "<div class=\"sanitized-placeholder\"></div>".to_string(),
         }
     }
 }
@@ -176,31 +176,37 @@ impl Default for InputRules {
     }
 }
 
+fn fmt_path(path: &Option<PathBuf>) -> String {
+    match path {
+        Some(p) => p.display().to_string(),
+        None => "".to_string(),
+    }
+}
+
+fn fmt_line(line: &Option<usize>) -> String {
+    match line {
+        Some(l) => format!(":{l}"),
+        None => String::new(),
+    }
+}
+
 #[derive(Error, Debug)]
 pub enum ConfigError {
     #[error("cannot read {path}: {source}")]
     Io { path: PathBuf, source: io::Error },
-    #[error("invalid policy file {path}: {message}")]
-    Parse { path: PathBuf, message: String },
+
+    #[error("invalid policy{}: {message}", fmt_path(path))]
+    Parse {
+        path: Option<PathBuf>,
+        message: String,
+    },
+
     #[error("invalid block-list {path} {}: {message}", fmt_line(line))]
     Blocklist {
         path: PathBuf,
         line: Option<usize>,
         message: String,
     },
-}
-
-fn fmt_line(line: &Option<usize>) -> String {
-    match line {
-        Some(l) => format!("line {}", l),
-        None => String::new(),
-    }
-}
-
-#[derive(Error, Debug)]
-pub enum ParseError {
-    #[error("convertion to punycode ASCII gone wrong: {source}")]
-    Idna { source: idna::Errors },
 }
 
 impl Policy {
@@ -217,7 +223,7 @@ impl Policy {
             source,
         })?;
         let mut policy: Policy = toml::from_str(&text).map_err(|e| ConfigError::Parse {
-            path: path.to_path_buf(),
+            path: Some(path.to_path_buf()),
             message: e.to_string(),
         })?;
         policy.source = PolicySource::File(path.to_path_buf());

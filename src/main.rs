@@ -17,6 +17,7 @@ use web_sanitizer::input;
 use web_sanitizer::policy::Policy;
 use web_sanitizer::report::{InputReport, InputStatus};
 
+// CONSTANT
 /// Exit code for configuration/usage errors
 const EXIT_CONFIG: u8 = 2;
 
@@ -64,12 +65,12 @@ fn run(args: args::Args) -> Result<u8, Box<dyn Error>> {
             match output_name(output_index, &input_report.source) {
                 Ok(o) => {
                     let pathfile = Path::new(&o);
-                    let path = out_dir.join(&pathfile);
+                    let path = out_dir.join(pathfile);
                     if let Err(e) = fs::write(&path, bytes) {
                         eprintln!("error: cannot write {}: {e}", path.display());
                         write_failures += 1;
                     }
-                },
+                }
                 Err(e) => {
                     eprintln!("{}", e);
                     write_failures += 1;
@@ -128,7 +129,7 @@ fn output_name(index: usize, source: &str) -> Result<String, String> {
     let base = Path::new(source)
         .file_name()
         .map(|n| n.to_string_lossy().into_owned())
-        .ok_or_else(|| format!("impossible retrieve a filename/extension"))?;
+        .ok_or_else(|| "impossible retrieve a filename/extension".to_string())?;
     let safe: String = base
         .chars()
         .map(|c| {
@@ -183,9 +184,15 @@ mod tests {
     #[test]
     fn output_names_are_indexed_and_sanitised() {
         assert_eq!(output_name(3, "/tmp/dir/page.html").unwrap(), "3-page.html");
-        assert_eq!(output_name(0, "http://example.com/a/b.html").unwrap(), "0-b.html");
+        assert_eq!(
+            output_name(0, "http://example.com/a/b.html").unwrap(),
+            "0-b.html"
+        );
         assert_eq!(output_name(1, "we ird$.html").unwrap(), "1-we_ird_.html");
         // A bare-host URL falls back to the host as the name.
-        assert_eq!(output_name(2, "http://example.com/").unwrap(), "2-example.com");
+        assert_eq!(
+            output_name(2, "http://example.com/").unwrap(),
+            "2-example.com"
+        );
     }
 }

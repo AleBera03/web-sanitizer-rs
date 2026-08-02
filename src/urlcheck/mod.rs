@@ -19,6 +19,9 @@
 //! The [`BlockSet`] and [`SkeletonSet`] are *borrowed*: it is owned by the engine and shared, so the
 //! worker pool hands every worker the same compiled lists without copying it.
 
+pub mod cache;
+use cache::VerdictCache;
+
 use std::sync::LazyLock;
 
 use url::{Host, ParseError, Url};
@@ -48,16 +51,23 @@ pub enum Verdict {
 pub struct UrlChecker<'a> {
     blockset: &'a BlockSet,
     skeletons: &'a SkeletonSet,
+    verdictcache: &'a VerdictCache,
     rules: &'a UrlRules,
 }
 
 impl<'a> UrlChecker<'a> {
     /// Build a checker over a borrowed block-list and URL policies.
-    pub fn new(blockset: &'a BlockSet, skeletons: &'a SkeletonSet, rules: &'a UrlRules) -> UrlChecker<'a> {
+    pub fn new(
+        blockset: &'a BlockSet,
+        skeletons: &'a SkeletonSet,
+        verdictcache: &'a VerdictCache,
+        rules: &'a UrlRules,
+    ) -> UrlChecker<'a> {
         UrlChecker {
             blockset,
             skeletons,
-            rules
+            verdictcache,
+            rules,
         }
     }
 
@@ -68,21 +78,26 @@ impl<'a> UrlChecker<'a> {
     }
 
     /// Classify one attribute value. Never dereferences or mutates anything.
+    ///
+    /// Memoised: classification is a pure function of `raw`, so every verdict
+    /// is cached, not only the ones on the fall-through path.
     pub fn check(&self, raw: &str) -> Verdict {
+        if let Some(verdict) = self.verdictcache.get(raw) {
+            return verdict;
+        }
+
+        let verdict = self.classify(raw);
+        self.verdictcache.insert(raw.to_string(), verdict);
+        verdict
+    }
+
+    /// The classification itself, cache-free. Kept apart from [`Self::check`]
+    /// so an early `return` leaves the verdict for the caller to memoise.
+    fn classify(&self, raw: &str) -> Verdict {
         if raw.bytes().any(|b| b < 0x20 || b == 0x7f) {
             return Verdict::Malformed;
         }
 
-        // A base-less `Url::parse` fails with exactly `RelativeUrlWithoutBase`
-        // for a genuine relative reference (`/path`, `#anchor`, `page.html`,
-        // `?q=1`, `../x`, `foo/bar`) — it names no host, so it is not our
-        // concern and is left untouched. EVERY other parse error means an
-        // absolute URL that failed to resolve: the host/split malformed class. 
-        // Fullwidth `＠`/`／` and other NFKC-to-delimiter tricks surface
-        // here as `IdnaError`; a bad port or IP literal as `InvalidPort` /
-        // `InvalidIp*`. Default-deny — neutralise all of them, so a more lenient
-        // parser downstream cannot resolve a host we never validated. Only the
-        // one benign variant escapes to `Clean`.
         let url = match Url::parse(raw) {
             Ok(url) => url,
             // protocol relative integration
@@ -95,24 +110,27 @@ impl<'a> UrlChecker<'a> {
             Err(ParseError::RelativeUrlWithoutBase) => return Verdict::Clean,
             Err(_) => return Verdict::Malformed,
         };
+
         // schemeless-host cases (`mailto:`, `data:`, `tel:`) carry no host
         // engine will notice bad schemes
-        let Some(host) = url.host_str() else {
+        let Some(host) = url.host() else {
             return Verdict::Clean;
         };
 
-        if self.blockset.contains(host) {
+        if self.blockset.contains(host.to_owned()) {
             return Verdict::Blocked;
         }
 
-        // homograph / IDN reporting only make sense for domain hosts
-        if matches!(url.host(), Some(Host::Domain(_))) {
+        // homograph / IDN reporting only make sense for domain hosts: the
+        // `Host` variant carries that distinction, so IP literals never reach
+        // the punycode path
+        if let Host::Domain(ascii) = host {
             // Decode punycode to the Unicode the user would actually see.
-            let (unicode, _) = idna::domain_to_unicode(host);
+            let (unicode, _) = idna::domain_to_unicode(ascii);
             if self.skeletons.confusable_with(&unicode) {
                 return Verdict::Homograph;
             }
-            if is_idn(host) {
+            if is_idn(ascii) {
                 return Verdict::Idn;
             }
         }
@@ -130,8 +148,8 @@ fn is_idn(ascii_host: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use crate::tests_helper::set_from::SetFrom;
     use super::*;
+    use crate::tests_helper::set_from::SetFrom;
 
     fn rules(protected: &[&str]) -> UrlRules {
         UrlRules {
@@ -140,24 +158,26 @@ mod tests {
         }
     }
 
-    fn checker<'a>(blockset: &'a BlockSet, skeletons: &'a SkeletonSet, rules: &'a UrlRules) -> UrlChecker<'a> {
+    fn checker<'a>(
+        blockset: &'a BlockSet,
+        skeletons: &'a SkeletonSet,
+        verdictcache: &'a VerdictCache,
+        rules: &'a UrlRules,
+    ) -> UrlChecker<'a> {
         // leak-free: rules is cloned into the checker, so the temporary is fine
-        UrlChecker::new(
-            blockset,
-            skeletons,
-            rules
-        )
+        UrlChecker::new(blockset, skeletons, verdictcache, rules)
     }
 
     // Block lists
 
     #[test]
     fn host_on_blocklist_is_blocked() {
-        let bs = BlockSet::set_from_list(&["evil.com"]);
+        let bs = BlockSet::set_from_list(&["0.0.0.0 evil.com"]);
         let protected = &[];
         let skeletons = SkeletonSet::set_from_list(protected);
+        let verdicache = VerdictCache::default();
         let rules = rules(protected);
-        let c = checker(&bs, &skeletons, &rules);
+        let c = checker(&bs, &skeletons, &verdicache, &rules);
         assert_eq!(c.check("http://evil.com/x"), Verdict::Blocked);
         // parent-domain suffix + case-insensitive.
         assert_eq!(c.check("https://a.b.EVIL.com/p?q=1"), Verdict::Blocked);
@@ -169,11 +189,12 @@ mod tests {
     fn protocol_relative_host_is_extracted_and_checked() {
         // `//host/path` carries an authority but no scheme; it still names a
         // host the browser resolves against the page scheme
-        let bs = BlockSet::set_from_list(&["evil.com"]);
+        let bs = BlockSet::set_from_list(&["0.0.0.0 evil.com"]);
         let protected = &["paypal.com"];
         let skeletons = SkeletonSet::set_from_list(protected);
+        let verdicache = VerdictCache::default();
         let rules = rules(protected);
-        let c = checker(&bs, &skeletons, &rules);
+        let c = checker(&bs, &skeletons, &verdicache, &rules);
         assert_eq!(c.check("//evil.com/path"), Verdict::Blocked); // blocklisted host
         assert_eq!(c.check("//a.b.evil.com/x"), Verdict::Blocked); // suffix walk
         assert_eq!(c.check("//p\u{0430}ypal.com/"), Verdict::Homograph); // homograph host
@@ -184,26 +205,33 @@ mod tests {
     fn malformed_protocol_relative_is_neutralised() {
         // A nested host/split, bad port, or empty authority in a protocol-
         // relative reference fails resolution and must not slip through as Clean.
-        let bs = BlockSet::set_from_list(&["evil.com"]);
+        let bs = BlockSet::set_from_list(&["0.0.0.0 evil.com"]);
         let protected = &[];
         let skeletons = SkeletonSet::set_from_list(protected);
+        let verdicache = VerdictCache::default();
         let rules = rules(protected);
-        let c = checker(&bs, &skeletons, &rules);
-        assert_eq!(c.check("//example.com\u{FF20}evil.com/"), Verdict::Malformed); // nested ＠
+        let c = checker(&bs, &skeletons, &verdicache, &rules);
+        assert_eq!(
+            c.check("//example.com\u{FF20}evil.com/"),
+            Verdict::Malformed
+        ); // nested ＠
         assert_eq!(c.check("//evil.com:99999/"), Verdict::Malformed); // invalid port
         assert_eq!(c.check("///path"), Verdict::Malformed); // empty authority
         assert_eq!(c.check("//"), Verdict::Malformed);
     }
 
     #[test]
-    fn punycode_host_matches_blocklisted_unicode_domain() {
-        // Block-list stores `münchen.de`; a punycode URL to it still blocks.
-        let bs = BlockSet::set_from_list(&["xn--mnchen-3ya.de"]);
+    fn punycode_blocklist_entry_matches_the_idn_host() {
+        // The list carries the ASCII/punycode form of `münchen.de` — the only
+        // form `Host` ever produces — so both spellings of the URL block.
+        let bs = BlockSet::set_from_list(&["0.0.0.0 xn--mnchen-3ya.de"]);
         let protected = &[];
         let skeletons = SkeletonSet::set_from_list(protected);
+        let verdicache = VerdictCache::default();
         let rules = rules(protected);
-        let c = checker(&bs, &skeletons, &rules);
+        let c = checker(&bs, &skeletons, &verdicache, &rules);
         assert_eq!(c.check("http://xn--mnchen-3ya.de/"), Verdict::Blocked);
+        assert_eq!(c.check("http://m\u{00fc}nchen.de/"), Verdict::Blocked);
     }
 
     // Homograph + IDN
@@ -213,8 +241,9 @@ mod tests {
         let bs = BlockSet::default();
         let protected = &["paypal.com"];
         let skeletons = SkeletonSet::set_from_list(protected);
+        let verdicache = VerdictCache::default();
         let rules = rules(protected);
-        let c = checker(&bs, &skeletons, &rules);
+        let c = checker(&bs, &skeletons, &verdicache, &rules);
         // `pаypal.com` with a Cyrillic а (U+0430) → punycode host, confusable.
         let spoof = "http://p\u{0430}ypal.com/login";
         assert_eq!(c.check(spoof), Verdict::Homograph);
@@ -225,8 +254,9 @@ mod tests {
         let bs = BlockSet::default();
         let protected = &["paypal.com"];
         let skeletons = SkeletonSet::set_from_list(protected);
+        let verdicache = VerdictCache::default();
         let rules = rules(protected);
-        let c = checker(&bs, &skeletons, &rules);
+        let c = checker(&bs, &skeletons, &verdicache, &rules);
         let spoof = "http://login.p\u{0430}ypal.com/";
         assert_eq!(c.check(spoof), Verdict::Homograph);
     }
@@ -236,8 +266,9 @@ mod tests {
         let bs = BlockSet::default();
         let protected = &["paypal.com"];
         let skeletons = SkeletonSet::set_from_list(protected);
+        let verdicache = VerdictCache::default();
         let rules = rules(protected);
-        let c = checker(&bs, &skeletons, &rules);
+        let c = checker(&bs, &skeletons, &verdicache, &rules);
         assert_eq!(c.check("https://paypal.com/"), Verdict::Clean);
         assert_eq!(c.check("https://login.paypal.com/"), Verdict::Clean);
     }
@@ -247,8 +278,9 @@ mod tests {
         let bs = BlockSet::default();
         let protected = &[]; // no protected domains
         let skeletons = SkeletonSet::set_from_list(protected);
+        let verdicache = VerdictCache::default();
         let rules = rules(protected);
-        let c = checker(&bs, &skeletons, &rules);
+        let c = checker(&bs, &skeletons, &verdicache, &rules);
         // münchen.de: a legitimate IDN, not confusable with anything protected.
         assert_eq!(c.check("http://m\u{00fc}nchen.de/"), Verdict::Idn);
         assert_eq!(c.check("http://xn--mnchen-3ya.de/"), Verdict::Idn);
@@ -259,11 +291,13 @@ mod tests {
         // Derive the punycode of the spoof host so the block-list entry is
         // exactly what `check` sees — no hand-computed xn-- to get wrong.
         let ascii = idna::domain_to_ascii("p\u{0430}ypal.com").unwrap();
-        let bs = BlockSet::set_from_list(&[ascii.as_str()]);
+        let entry = format!("0.0.0.0 {ascii}");
+        let bs = BlockSet::set_from_list(&[entry.as_str()]);
         let protected = &["paypal.com"];
         let skeletons = SkeletonSet::set_from_list(protected);
+        let verdicache = VerdictCache::default();
         let rules = rules(protected);
-        let c = checker(&bs, &skeletons, &rules);
+        let c = checker(&bs, &skeletons, &verdicache, &rules);
         assert_eq!(c.check("http://p\u{0430}ypal.com/"), Verdict::Blocked);
     }
 
@@ -274,8 +308,9 @@ mod tests {
         let bs = BlockSet::default();
         let protected = &[];
         let skeletons = SkeletonSet::set_from_list(protected);
+        let verdicache = VerdictCache::default();
         let rules = rules(protected);
-        let c = checker(&bs, &skeletons, &rules);
+        let c = checker(&bs, &skeletons, &verdicache, &rules);
         assert_eq!(c.check("http://exa\r\nmple.com/"), Verdict::Malformed);
         assert_eq!(c.check("http://exa\tmple.com/"), Verdict::Malformed);
         assert_eq!(c.check("http://example.com/\u{0000}"), Verdict::Malformed);
@@ -286,9 +321,13 @@ mod tests {
         let bs = BlockSet::default();
         let protected = &[];
         let skeletons = SkeletonSet::set_from_list(protected);
+        let verdicache = VerdictCache::default();
         let rules = rules(protected);
-        let c = checker(&bs, &skeletons, &rules);
-        assert_eq!(c.check("http://example.com\u{FF20}evil.com/"), Verdict::Malformed); // ＠
+        let c = checker(&bs, &skeletons, &verdicache, &rules);
+        assert_eq!(
+            c.check("http://example.com\u{FF20}evil.com/"),
+            Verdict::Malformed
+        ); // ＠
         assert_eq!(c.check("http://evil.com\u{FF0F}path"), Verdict::Malformed); //         ／
         assert_eq!(c.check("http://exa mple.com/"), Verdict::Malformed); // raw space in host
     }
@@ -301,8 +340,9 @@ mod tests {
         let bs = BlockSet::default();
         let protected = &[];
         let skeletons = SkeletonSet::set_from_list(protected);
+        let verdicache = VerdictCache::default();
         let rules = rules(protected);
-        let c = checker(&bs, &skeletons, &rules);
+        let c = checker(&bs, &skeletons, &verdicache, &rules);
         assert_eq!(c.check("http://example.com:99999/"), Verdict::Malformed); // InvalidPort
         assert_eq!(c.check("http://999.999.999.999/"), Verdict::Malformed); //   InvalidIpv4Address
         assert_eq!(c.check("http://[::1/"), Verdict::Malformed); //              InvalidIpv6Address
@@ -312,11 +352,12 @@ mod tests {
 
     #[test]
     fn relative_and_hostless_urls_are_clean() {
-        let bs = BlockSet::set_from_list(&["evil.com"]);
+        let bs = BlockSet::set_from_list(&["0.0.0.0 evil.com"]);
         let protected = &["paypal.com"];
         let skeletons = SkeletonSet::set_from_list(protected);
+        let verdicache = VerdictCache::default();
         let rules = rules(protected);
-        let c = checker(&bs, &skeletons, &rules);
+        let c = checker(&bs, &skeletons, &verdicache, &rules);
         assert_eq!(c.check("/relative/path"), Verdict::Clean);
         assert_eq!(c.check("#anchor"), Verdict::Clean);
         assert_eq!(c.check("page.html"), Verdict::Clean);
@@ -327,13 +368,88 @@ mod tests {
         assert_eq!(c.check("https://example.com/"), Verdict::Clean);
     }
 
+    // memoisation
+
+    #[test]
+    fn every_verdict_is_memoised_not_only_the_clean_one() {
+        // each raw string is classified once, whatever the verdict: the second
+        // pass must be served entirely by the cache
+        let bs = BlockSet::set_from_list(&["0.0.0.0 evil.com"]);
+        let protected = &["paypal.com"];
+        let skeletons = SkeletonSet::set_from_list(protected);
+        let verdicache = VerdictCache::default();
+        let rules = rules(protected);
+        let c = checker(&bs, &skeletons, &verdicache, &rules);
+
+        let cases = [
+            ("http://evil.com/", Verdict::Blocked),
+            ("http://p\u{0430}ypal.com/", Verdict::Homograph),
+            ("http://m\u{00fc}nchen.de/", Verdict::Idn),
+            ("http://exa\r\nmple.com/", Verdict::Malformed),
+            ("http://example.com:99999/", Verdict::Malformed),
+            ("/relative/path", Verdict::Clean),
+            ("https://example.com/", Verdict::Clean),
+        ];
+
+        for (raw, expected) in cases {
+            assert_eq!(c.check(raw), expected);
+        }
+        // all misses so far: distinct urls, none seen before
+        assert_eq!(verdicache.hit_rate(), 0.0);
+
+        for (raw, expected) in cases {
+            assert_eq!(c.check(raw), expected);
+        }
+        // one hit per miss
+        assert!((verdicache.hit_rate() - 0.5).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn a_cached_verdict_short_circuits_classification() {
+        // the lookup happens before any parsing: a pre-seeded entry wins over
+        // the block-list, which is what makes the cache observable at all
+        let bs = BlockSet::set_from_list(&["0.0.0.0 evil.com"]);
+        let protected = &[];
+        let skeletons = SkeletonSet::set_from_list(protected);
+        let verdicache = VerdictCache::default();
+        let rules = rules(protected);
+        let c = checker(&bs, &skeletons, &verdicache, &rules);
+
+        verdicache.insert("http://evil.com/".to_string(), Verdict::Clean);
+        assert_eq!(c.check("http://evil.com/"), Verdict::Clean);
+        // a sibling url is untouched and still classified
+        assert_eq!(c.check("http://evil.com/other"), Verdict::Blocked);
+    }
+
+    #[test]
+    fn the_cache_is_keyed_on_the_raw_value_not_the_host() {
+        // two spellings of one host are two entries, and both must reach the
+        // same verdict on their own
+        let bs = BlockSet::set_from_list(&["0.0.0.0 evil.com"]);
+        let protected = &[];
+        let skeletons = SkeletonSet::set_from_list(protected);
+        let verdicache = VerdictCache::default();
+        let rules = rules(protected);
+        let c = checker(&bs, &skeletons, &verdicache, &rules);
+
+        assert_eq!(c.check("http://evil.com/"), Verdict::Blocked);
+        assert_eq!(c.check("http://EVIL.com/"), Verdict::Blocked);
+        assert_eq!(c.check("//evil.com/"), Verdict::Blocked);
+        // three misses, no hit
+        assert_eq!(verdicache.hit_rate(), 0.0);
+    }
+
     #[test]
     fn ip_host_is_neither_idn_or_homograph() {
+        // `Host::Ipv4`/`Host::Ipv6` skip the punycode path entirely, so the
+        // bracketed IPv6 form is never mistaken for a domain label.
         let bs = BlockSet::default();
         let protected = &["paypal.com"];
         let skeletons = SkeletonSet::set_from_list(protected);
+        let verdicache = VerdictCache::default();
         let rules = rules(protected);
-        let c = checker(&bs, &skeletons, &rules);
+        let c = checker(&bs, &skeletons, &verdicache, &rules);
         assert_eq!(c.check("http://203.0.113.9/"), Verdict::Clean);
+        assert_eq!(c.check("http://[2001:db8::1]/"), Verdict::Clean);
     }
 }

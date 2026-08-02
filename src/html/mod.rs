@@ -17,7 +17,7 @@
 //! We feed raw bytes (never `rewrite_str`) so malformed
 //! or non-UTF-8 input degrades gracefully instead of panicking.
 //!
-//! 
+//!
 //! URL block-list / homograph inspection runs on the URL-bearing attributes of surviving elements
 //! and delegates classification to [`crate::urlcheck::UrlChecker`], mapping the
 //! verdict to the URL policy action:
@@ -42,7 +42,7 @@ use crate::urlcheck::{UrlChecker, Verdict};
 
 // CONSTANTS
 const CATEGORY_XSS: &str = "xss";
-/// Attributes url correlated
+/// Attributes url correlated.
 const HTML_ATTRIBUTES: &[&str] = &["href", "src", "action", "formaction", "data", "poster"];
 
 /// Result of sanitising one HTML document.
@@ -166,7 +166,7 @@ impl Ctx<'_> {
         true
     }
 
-    /// AC-8: replace `<iframe>`/`<object>`/`<embed>` whose target origin is not
+    /// replace `<iframe>`/`<object>`/`<embed>` whose target origin is not
     /// allow-listed with an inert placeholder element.
     fn frame_rule<H: HandlerTypes>(&self, el: &mut Element<'_, '_, H>, tag: &str) -> bool {
         let action = self.rules.action_frame;
@@ -193,7 +193,7 @@ impl Ctx<'_> {
         true
     }
 
-    /// AC-9: remove `<meta http-equiv="refresh">` (case-insensitive).
+    /// remove `<meta http-equiv="refresh">` (case-insensitive).
     fn meta_refresh_rule<H: HandlerTypes>(&self, el: &mut Element<'_, '_, H>) -> bool {
         let is_refresh = el
             .get_attribute("http-equiv")
@@ -404,7 +404,7 @@ impl Ctx<'_> {
 }
 
 /// Reconstruct an `name="value"` fragment for the report, truncated to the
-/// action-fragment budget (AC-5).
+/// action-fragment budget.
 fn attr_fragment(name: &str, value: &str) -> String {
     truncate_fragment(&format!("{name}=\"{value}\""), MAX_FRAGMENT_BYTES)
 }
@@ -436,16 +436,23 @@ mod tests {
     use crate::policy::blockset::BlockSet;
     use crate::policy::protectedset::SkeletonSet;
     use crate::tests_helper::set_from::SetFrom;
+    use crate::urlcheck::cache::VerdictCache;
 
     static EMPTY_BLOCKSET: LazyLock<BlockSet> = LazyLock::new(BlockSet::default);
     static EMPTY_SKELETONSET: LazyLock<SkeletonSet> = LazyLock::new(SkeletonSet::default);
+    static DEFAULT_VERDICTCACHE: LazyLock<VerdictCache> = LazyLock::new(VerdictCache::default);
     static DEFAULT_RULES: LazyLock<UrlRules> = LazyLock::new(UrlRules::default);
 
     const FRAME_PLACEHOLDER: &str = "<div class=\"sanitized-placeholder\"></div>";
 
     /// A URL checker that never fires: empty block-list, no protected domains.
     fn no_url_checker() -> UrlChecker<'static> {
-        UrlChecker::new(&EMPTY_BLOCKSET, &EMPTY_SKELETONSET,&DEFAULT_RULES)
+        UrlChecker::new(
+            &EMPTY_BLOCKSET,
+            &EMPTY_SKELETONSET,
+            &DEFAULT_VERDICTCACHE,
+            &DEFAULT_RULES,
+        )
     }
 
     fn run(html: &str) -> HtmlOutcome {
@@ -460,7 +467,7 @@ mod tests {
         String::from_utf8(o.output.clone()).unwrap()
     }
 
-    // ---- AC-5: script -----------------------------------------------------
+    // SCRIPT
 
     #[test]
     fn inline_script_is_removed_and_reported() {
@@ -511,7 +518,7 @@ mod tests {
         );
     }
 
-    // ---- AC-6: event handlers --------------------------------------------
+    // EVENT HANDLERS
 
     #[test]
     fn event_handlers_are_stripped_by_prefix() {
@@ -528,7 +535,7 @@ mod tests {
         );
     }
 
-    // ---- AC-7: dangerous schemes -----------------------------------------
+    // DANGEROUS SCHEMES
 
     #[test]
     fn javascript_href_is_rewritten_to_blocked() {
@@ -565,7 +572,7 @@ mod tests {
         assert!(o.actions.is_empty());
     }
 
-    // ---- AC-8: frames -----------------------------------------------------
+    // FRAMES
 
     #[test]
     fn iframe_off_allowlist_is_placeholdered() {
@@ -600,7 +607,7 @@ mod tests {
         assert!(o.actions.is_empty());
     }
 
-    // ---- AC-9: meta refresh ----------------------------------------------
+    // META REFRESH
 
     #[test]
     fn meta_refresh_is_removed() {
@@ -621,7 +628,7 @@ mod tests {
         assert_eq!(o.actions.len(), 1);
     }
 
-    // ---- cross-cutting behaviour -----------------------------------------
+    // CROSS-CUTTING BEHAVIOUR
 
     #[test]
     fn benign_document_passes_through_byte_identical() {
@@ -684,7 +691,7 @@ mod tests {
         let _ = o.output; // must have completed without panicking
     }
 
-    // ---- AC-10 – AC-13: URL inspection -----------------------------------
+    // URL INSPECTION
 
     fn run_urls(html: &str, blocklist: &[&str], protected: &[&str]) -> HtmlOutcome {
         let blockset = BlockSet::set_from_list(blocklist);
@@ -693,16 +700,17 @@ mod tests {
             ..Default::default()
         };
         let skeletons = SkeletonSet::set_from_list(protected);
-        let checker = UrlChecker::new(&blockset, &skeletons, &rules);
+        let verdicache = VerdictCache::default();
+        let checker = UrlChecker::new(&blockset, &skeletons, &verdicache, &rules);
         sanitize_html(html.as_bytes(), &HtmlRules::default(), &checker)
     }
 
     #[test]
     fn blocklisted_anchor_is_rewritten_to_placeholder() {
-        // AC-10 / AC-11: host on the block-list → rewrite to placeholder_url.
+        // rewrite to placeholder_url.
         let o = run_urls(
             r#"<a href="http://evil.com/phish">x</a>"#,
-            &["evil.com"],
+            &["0.0.0.0 evil.com"],
             &[],
         );
         let s = out(&o);
@@ -718,10 +726,10 @@ mod tests {
 
     #[test]
     fn blocklist_matches_resource_references_and_forms() {
-        // AC-10: anchors, forms, and resource references are all inspected.
+        // anchors, forms, and resource references are all inspected
         let o = run_urls(
             r#"<img src="http://ads.evil.com/p.gif"><form action="http://evil.com/post"></form>"#,
-            &["evil.com"],
+            &["0.0.0.0 evil.com"],
             &[],
         );
         assert_eq!(o.actions.len(), 2);
@@ -732,9 +740,13 @@ mod tests {
 
     #[test]
     fn protocol_relative_blocklisted_anchor_is_rewritten() {
-        // AC-10: `//host/path` names a host even without a scheme; a
-        // block-listed one is rewritten end-to-end just like an absolute URL.
-        let o = run_urls(r#"<a href="//evil.com/phish">x</a>"#, &["evil.com"], &[]);
+        // //host/path names a host even without a scheme
+        // a block-listed one is rewritten end-to-end just like an absolute URL.
+        let o = run_urls(
+            r#"<a href="//evil.com/phish">x</a>"#,
+            &["0.0.0.0 evil.com"],
+            &[],
+        );
         let s = out(&o);
         assert!(s.contains(r##"href="#blocked""##));
         assert!(!s.contains("evil.com"));
@@ -746,8 +758,8 @@ mod tests {
 
     #[test]
     fn malformed_protocol_relative_anchor_is_neutralised() {
-        // AC-13: a nested host/split (fullwidth `＠`) inside a protocol-relative
-        // reference is neutralised, never emitted verbatim.
+        // a nested host/split (fullwidth `＠`) inside a protocol-relative
+        // reference is neutralised, never emitted verbatim
         let o = run_urls("<a href=\"//example.com\u{FF20}evil.com/\">x</a>", &[], &[]);
         assert_eq!(o.actions.len(), 1);
         assert_eq!(o.actions[0].rule_id, "url.malformed");
@@ -759,7 +771,7 @@ mod tests {
 
     #[test]
     fn homograph_anchor_fires_homograph_action() {
-        // AC-12: Cyrillic-а spoof of a protected domain.
+        // Cyrillic-а spoof of a protected domain
         let spoof = "http://p\u{0430}ypal.com/login";
         let o = run_urls(&format!(r#"<a href="{spoof}">x</a>"#), &[], &["paypal.com"]);
         assert_eq!(o.actions.len(), 1);
@@ -770,7 +782,7 @@ mod tests {
 
     #[test]
     fn plain_idn_is_reported_but_left_in_place() {
-        // AC-12: an `xn--` host that is not a spoof is report-only (allow).
+        // an `xn--` host that is not a spoof is report-only (allow)
         let o = run_urls("<a href=\"http://xn--mnchen-3ya.de/\">x</a>", &[], &[]);
         assert_eq!(o.actions.len(), 1);
         assert_eq!(o.actions[0].rule_id, "url.idn");
@@ -782,7 +794,7 @@ mod tests {
 
     #[test]
     fn control_char_url_is_neutralised() {
-        // AC-13: embedded CR/LF host-split → malformed, neutralised.
+        // embedded CR/LF host-split → malformed, neutralised
         let o = run_urls("<a href=\"http://exa\r\nmple.com/\">x</a>", &[], &[]);
         assert_eq!(o.actions.len(), 1);
         assert_eq!(o.actions[0].rule_id, "url.malformed");
@@ -794,7 +806,7 @@ mod tests {
     fn benign_and_relative_urls_are_untouched() {
         let o = run_urls(
             r#"<a href="https://example.com/ok">x</a><img src="/local.png">"#,
-            &["evil.com"],
+            &["0.0.0.0 evil.com"],
             &["paypal.com"],
         );
         assert!(o.actions.is_empty());
@@ -804,9 +816,13 @@ mod tests {
 
     #[test]
     fn neutralised_scheme_is_not_double_processed_by_url_rule() {
-        // AC-7 rewrites `javascript:` to `#blocked`; the URL rule then sees a
-        // hostless relative ref and records nothing further.
-        let o = run_urls(r#"<a href="javascript:alert(1)">x</a>"#, &["evil.com"], &[]);
+        // rewrites `javascript:` to `#blocked`
+        //the URL rule then sees a hostless relative ref and records nothing further.
+        let o = run_urls(
+            r#"<a href="javascript:alert(1)">x</a>"#,
+            &["0.0.0.0 evil.com"],
+            &[],
+        );
         assert_eq!(o.actions.len(), 1);
         assert_eq!(o.actions[0].rule_id, "html.attr.dangerous_scheme");
     }
