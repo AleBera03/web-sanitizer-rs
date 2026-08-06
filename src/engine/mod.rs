@@ -67,9 +67,11 @@ use crate::policy::protectedset::SkeletonSet;
 use crate::policy::{ConfigError, Policy, blockset::BlockSet};
 use crate::report::{InputReport, InputStatus, RunReport};
 
-#[allow(dead_code, reason=
-    "waiting for completation of entire engine
-    pipeline to call sanitize_html")]
+#[allow(
+    dead_code,
+    reason = "waiting for completation of entire engine
+    pipeline to call sanitize_html"
+)]
 pub struct Engine {
     policy: Arc<Policy>,
     blockset: BlockSet,
@@ -185,6 +187,11 @@ impl Engine {
                 sanitized: None,
             };
         }
+
+        if self.policy.subresources.fetch_subresources {
+            //call all subresource fetchers and sanitizers
+        }
+
         // Stub for now
         let bytes_in = data.len() as u64;
         let output = data;
@@ -233,12 +240,10 @@ impl Engine {
                     .map(|fetched| fetched.body)
                     .map_err(|e| (InputStatus::FetchError, e.to_string()))
             }
-            InputSource::MalformedUrl(s) => {
-                Err((
-                    InputStatus::MalformedUrl,
-                    format!("url `{}` does not respect WHATWG standards", s),
-                ))
-            }
+            InputSource::MalformedUrl(s) => Err((
+                InputStatus::MalformedUrl,
+                format!("url `{}` does not respect WHATWG standards", s),
+            )),
         }
     }
 }

@@ -1,4 +1,6 @@
 use crate::input::InputSource;
+use crate::policy::protectedset::SkeletonSet;
+use crate::policy::{ConfigError, Policy, blockset::BlockSet};
 use crate::report::SanitisationAction;
 use crate::sniff::MimeType::{
     ApplicationPdf, ApplicationZip, ImageGif, ImageJpeg, ImagePng, ImageSvg, ImageTiff, ImageWebp,
@@ -6,6 +8,7 @@ use crate::sniff::MimeType::{
 };
 
 use std::path::Path;
+use std::sync::Arc;
 use url::Url;
 
 // CONSTANTS
@@ -16,6 +19,16 @@ const GIF87A: &[u8] = b"GIF87a";
 const GIF89A: &[u8] = b"GIF89a";
 const HTML_DOCTYPE: &[u8] = b"<!DOCTYPE html>";
 const PDF: &[u8] = b"%PDF-";
+const XML: &[u8] = b"<?xml";
+const FLAC: &[u8] = b"fLaC";
+// MP3 files can start with "ID3" or with a frame sync (0xFF 0xFB)
+const MP3_ID3: &[u8] = b"ID3";
+const MP3_FRAME_SYNC: &[u8] = &[0xFF, 0xFB];
+const AVI_TYPE: &[u8] = b"AVI ";
+const WAVE_TYPE: &[u8] = b"WAVE";
+// MP4 files does not have the magic number at offset 0
+const MP4_FTYP: &[u8] = b"ftyp";
+const MP4_FTYP_OFFSET: usize = 4;
 // TIFF has 2 variants for endiannes
 const TIFF_LE: &[u8] = b"II*\0";
 const TIFF_BE: &[u8] = b"MM\0*";
@@ -33,6 +46,11 @@ pub enum MimeType {
     ApplicationPdf,
     ImageTiff,
     ApplicationZip,
+    AudioFlac,
+    AudioMp3,
+    AudioWav,
+    VideoAvi,
+    VideoMp4,
 }
 
 impl MimeType {
@@ -53,7 +71,7 @@ pub struct SniffOutcome {
     pub refused: bool,
 }
 
-pub fn sniff_input(input: AcquiredInput, verbose: u8) -> SniffOutcome {
+pub fn sniff_input(input: AcquiredInput, policy: Arc<Policy>, verbose: u8) -> SniffOutcome {
     let declared_mime = read_declared_mime(&input, verbose);
     let actual_mime = read_actual_mime(&input);
 
@@ -106,6 +124,18 @@ fn read_actual_mime(input: &AcquiredInput) -> Option<MimeType> {
         Some(ImageTiff)
     } else if input.data.starts_with(ZIP_OOXML) {
         Some(ApplicationZip)
+    } else if input.data.starts_with(FLAC) {
+        Some(AudioFlac)
+    } else if input.data.starts_with(MP3_ID3) || input.data.starts_with(MP3_FRAME_SYNC) {
+        Some(AudioMp3)
+    } else if input.data.starts_with(WAVE_TYPE) {
+        Some(AudioWav)
+    } else if input.data.starts_with(AVI_TYPE) {
+        Some(VideoAvi)
+    } else if input.data.len() > MP4_FTYP_OFFSET
+        && &input.data[MP4_FTYP_OFFSET..MP4_FTYP_OFFSET + MP4_FTYP.len()] == MP4_FTYP
+    {
+        Some(VideoMp4)
     } else {
         None
     }

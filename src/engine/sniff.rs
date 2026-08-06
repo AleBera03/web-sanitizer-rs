@@ -1,9 +1,12 @@
-use crate::sniff::{AcquiredInput, SniffOutcome, sniff_input};
+use std::sync::Arc;
 
+use crate::policy::protectedset::SkeletonSet;
+use crate::policy::{ConfigError, Policy, blockset::BlockSet};
+use crate::sniff::{AcquiredInput, SniffOutcome, sniff_input};
 //TEMP - spostare in file a parte
 use crate::scan::{ScanOutcome, scan_active_content};
 
-pub fn run(input: AcquiredInput, verbose: u8) -> SniffOutcome {
+pub fn run(input: AcquiredInput, policy: Arc<Policy>, verbose: u8) -> SniffOutcome {
     let start = std::time::Instant::now();
     let mut actions = Vec::new();
     let mut bytes_out = 0;

@@ -53,6 +53,7 @@ pub struct Policy {
     pub budgets: Budgets,
     pub fetch: FetchPolicy,
     pub input: InputRules,
+    pub subresources: SubresourcesRules,
     #[serde(skip)]
     pub source: PolicySource,
 }
@@ -177,24 +178,24 @@ impl Default for InputRules {
     }
 }
 
-/// Sniff rules for subresources
+/// Sniff actions for subresources
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-pub enum SniffRule {
+pub enum SniffAction {
     /// Reject subresources that do not match declared MIME type
     Reject,
     /// Replace extension of subresources that do not match declared MIME type
     Rewrite,
 }
 
-/// Active content rules for subresources
+/// Active content actions for subresources
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-pub enum ActiveContentRule {
+pub enum ActiveContentAction {
     /// Reject subresources that contain active content
     Reject,
     /// CDR - remove active content from the resource, if possible, otherwise reject
     Rewrite,
     /// Flag subresources that contain active content, but do not reject them
-    Flag,
+    Allow,
 }
 
 /// Subresources handling rules
