@@ -1,4 +1,6 @@
 pub mod active;
-pub mod bomb;
+pub mod dos;
 
-pub use active::{ScanOutcome, scan_content};
+mod utilities;
+
+//pub use active::{ScanOutcome, scan_content};
