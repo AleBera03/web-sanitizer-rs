@@ -11,7 +11,6 @@ pub mod protectedset;
 use std::fmt;
 use std::fs;
 use std::io;
-use std::ops::Sub;
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
@@ -83,7 +82,7 @@ impl Default for HtmlRules {
             action_dangerous_scheme: Action::Rewrite,
             action_frame: Action::Placeholder,
             action_meta_refresh: Action::Remove,
-            placeholder_frame: "<div class=\"sanitized-placeholder\"></div>".to_string(),,
+            placeholder_frame: "<div class=\"sanitized-placeholder\"></div>".to_string(),
         }
     }
 }
@@ -203,16 +202,16 @@ pub enum ActiveContentAction {
 #[serde(default, deny_unknown_fields)]
 pub struct SubresourcesRules {
     pub fetch_subresources: bool,
-    pub sniff_rule: SniffRule,
-    pub active_content_rule: ActiveContentRule,
+    pub sniff_rule: SniffAction,
+    pub active_content_rule: ActiveContentAction,
 }
 
 impl Default for SubresourcesRules {
     fn default() -> Self {
         SubresourcesRules {
             fetch_subresources: false,
-            sniff_rule: SniffRule::Reject,
-            active_content_rule: ActiveContentRule::Reject,
+            sniff_rule: SniffAction::Reject,
+            active_content_rule: ActiveContentAction::Reject,
         }
     }
 }

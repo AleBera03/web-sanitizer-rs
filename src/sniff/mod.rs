@@ -1,10 +1,9 @@
 use crate::input::InputSource;
-use crate::policy::protectedset::SkeletonSet;
-use crate::policy::{ConfigError, Policy, blockset::BlockSet};
-use crate::report::SanitisationAction;
+use crate::policy::{Action, Policy, SniffAction};
+use crate::report::{Location, SanitisationAction};
 use crate::sniff::MimeType::{
-    ApplicationPdf, ApplicationZip, ImageGif, ImageJpeg, ImagePng, ImageSvg, ImageTiff, ImageWebp,
-    TextHtml,
+    ApplicationPdf, ApplicationZip, AudioFlac, AudioMp3, AudioWav, ImageGif, ImageJpeg, ImagePng,
+    ImageSvg, ImageTiff, ImageWebp, TextHtml, VideoAvi, VideoMp4,
 };
 
 use std::path::Path;
@@ -21,6 +20,7 @@ const HTML_DOCTYPE: &[u8] = b"<!DOCTYPE html>";
 const PDF: &[u8] = b"%PDF-";
 const XML: &[u8] = b"<?xml";
 const FLAC: &[u8] = b"fLaC";
+const SVG: &[u8] = b"<svg";
 // MP3 files can start with "ID3" or with a frame sync (0xFF 0xFB)
 const MP3_ID3: &[u8] = b"ID3";
 const MP3_FRAME_SYNC: &[u8] = &[0xFF, 0xFB];
@@ -42,10 +42,11 @@ pub enum MimeType {
     ImageGif,
     ImageWebp,
     ImageSvg,
+    ImageTiff,
     TextHtml,
     ApplicationPdf,
-    ImageTiff,
     ApplicationZip,
+    ApplicationXml,
     AudioFlac,
     AudioMp3,
     AudioWav,
@@ -60,8 +61,14 @@ impl MimeType {
 }
 
 pub struct AcquiredInput {
-    source: InputSource,
-    data: Vec<u8>,
+    pub source: InputSource,
+    pub data: Vec<u8>,
+}
+
+impl AcquiredInput {
+    pub fn new(source: InputSource, data: Vec<u8>) -> Self {
+        Self { source, data }
+    }
 }
 
 pub struct SniffOutcome {
@@ -72,15 +79,26 @@ pub struct SniffOutcome {
 }
 
 pub fn sniff_input(input: AcquiredInput, policy: Arc<Policy>, verbose: u8) -> SniffOutcome {
-    let declared_mime = read_declared_mime(&input, verbose);
+    let _ = verbose;
+    let declared_mime = read_declared_mime(&input);
     let actual_mime = read_actual_mime(&input);
 
     if declared_mime != actual_mime {
-        //TEMP
-        eprintln!(
-            "Declared MIME type ({:?}) does not match actual MIME type ({:?}) for source {:?}",
-            declared_mime, actual_mime, input.source
-        );
+        let action = match policy.subresources.sniff_rule {
+            SniffAction::Reject => Action::Refuse,
+            SniffAction::Rewrite => Action::Rewrite,
+        };
+        let output = if matches!(policy.subresources.sniff_rule, SniffAction::Rewrite) {
+            Some(input.data.clone())
+        } else {
+            None
+        };
+        return SniffOutcome {
+            output,
+            mime_type: actual_mime,
+            actions: vec![mismatch_action(action)],
+            refused: matches!(policy.subresources.sniff_rule, SniffAction::Reject),
+        };
     }
 
     SniffOutcome {
@@ -91,24 +109,39 @@ pub fn sniff_input(input: AcquiredInput, policy: Arc<Policy>, verbose: u8) -> Sn
     }
 }
 
-fn read_declared_mime(input: &AcquiredInput, verbose: u8) -> Option<MimeType> {
+fn mismatch_action(action: Action) -> SanitisationAction {
+    SanitisationAction {
+        rule_id: "sniff.mime_mismatch".to_string(),
+        category: "sniff".to_string(),
+        location: Location {
+            line: 0,
+            byte_offset: 0,
+        },
+        original: String::new(),
+        action,
+        replacement: None,
+    }
+}
+
+fn read_declared_mime(input: &AcquiredInput) -> Option<MimeType> {
     let ext = match &input.source {
-        InputSource::Bytes { data, name } => {
+        InputSource::Bytes { name, .. } => {
             if !name.is_empty() {
-                read_mime_from_bytes(&name)
+                read_mime_from_bytes(name)
             } else {
                 None
             }
         }
 
-        InputSource::File(path) => read_mime_from_file(&path),
-        InputSource::Url(url) => read_mime_from_url(&url),
-        InputSource::MalformedUrl(s) => None,
+        InputSource::File(path) => read_mime_from_file(path),
+        InputSource::Url(url) => read_mime_from_url(url),
+        InputSource::MalformedUrl(_) => None,
     }?;
 
     mime_from_extension(ext)
 }
 
+//TODO riordinare i tipi per macrotipi così rimane più leggibile
 fn read_actual_mime(input: &AcquiredInput) -> Option<MimeType> {
     if input.data.starts_with(JPEG) {
         Some(ImageJpeg)
@@ -136,6 +169,10 @@ fn read_actual_mime(input: &AcquiredInput) -> Option<MimeType> {
         && &input.data[MP4_FTYP_OFFSET..MP4_FTYP_OFFSET + MP4_FTYP.len()] == MP4_FTYP
     {
         Some(VideoMp4)
+    } else if input.data.starts_with(XML) {
+        Some(ApplicationXml)
+    } else if input.data.starts_with(SVG) {
+        Some(ImageSvg)
     } else {
         None
     }
@@ -203,8 +240,6 @@ mod tests {
         }
     }
 
-    // ---- actual MIME (magic bytes) -----------------------------------------
-
     #[test]
     fn detects_jpeg_from_magic_bytes() {
         let input = bytes_input("x", &[0xFF, 0xD8, 0xFF, 0x00]);
@@ -270,34 +305,31 @@ mod tests {
     #[test]
     fn declared_mime_from_bytes_name_extension() {
         let input = bytes_input("photo.jpeg", b"");
-        assert_eq!(read_declared_mime(&input, 0), Some(MimeType::ImageJpeg));
+        assert_eq!(read_declared_mime(&input), Some(MimeType::ImageJpeg));
     }
 
     #[test]
     fn declared_mime_from_bytes_empty_name_is_none() {
         let input = bytes_input("", b"");
-        assert_eq!(read_declared_mime(&input, 0), None);
+        assert_eq!(read_declared_mime(&input), None);
     }
 
     #[test]
     fn declared_mime_from_file_path_extension() {
         let input = file_input("/tmp/report.pdf", b"");
-        assert_eq!(
-            read_declared_mime(&input, 0),
-            Some(MimeType::ApplicationPdf)
-        );
+        assert_eq!(read_declared_mime(&input), Some(MimeType::ApplicationPdf));
     }
 
     #[test]
     fn declared_mime_from_url_path_extension() {
         let input = url_input("https://example.com/assets/logo.png", b"");
-        assert_eq!(read_declared_mime(&input, 0), Some(MimeType::ImagePng));
+        assert_eq!(read_declared_mime(&input), Some(MimeType::ImagePng));
     }
 
     #[test]
     fn declared_mime_from_url_without_extension_is_none() {
         let input = url_input("https://example.com/assets/", b"");
-        assert_eq!(read_declared_mime(&input, 0), None);
+        assert_eq!(read_declared_mime(&input), None);
     }
 
     #[test]
@@ -306,19 +338,19 @@ mod tests {
             source: InputSource::MalformedUrl("ht!tp://broken".to_string()),
             data: Vec::new(),
         };
-        assert_eq!(read_declared_mime(&input, 0), None);
+        assert_eq!(read_declared_mime(&input), None);
     }
 
     #[test]
     fn declared_mime_is_case_insensitive() {
         let input = bytes_input("IMAGE.PNG", b"");
-        assert_eq!(read_declared_mime(&input, 0), Some(MimeType::ImagePng));
+        assert_eq!(read_declared_mime(&input), Some(MimeType::ImagePng));
     }
 
     #[test]
     fn unrecognised_extension_is_none() {
         let input = bytes_input("archive.rar", b"");
-        assert_eq!(read_declared_mime(&input, 0), None);
+        assert_eq!(read_declared_mime(&input), None);
     }
 
     // ---- sniff_input ---------------------------------------------------------
@@ -326,14 +358,14 @@ mod tests {
     #[test]
     fn sniff_input_reports_detected_mime_type() {
         let input = bytes_input("photo.jpg", &[0xFF, 0xD8, 0xFF, 0x00]);
-        let outcome = sniff_input(input, 0);
+        let outcome = sniff_input(input, Arc::new(Policy::builtin()), 0);
         assert_eq!(outcome.mime_type, Some(MimeType::ImageJpeg));
     }
 
     #[test]
     fn sniff_input_on_unrecognised_bytes_has_no_mime_type() {
         let input = bytes_input("x", b"not a known format");
-        let outcome = sniff_input(input, 0);
+        let outcome = sniff_input(input, Arc::new(Policy::builtin()), 0);
         assert_eq!(outcome.mime_type, None);
     }
 
@@ -343,7 +375,7 @@ mod tests {
             "fake.jpg",
             &[0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A],
         );
-        let outcome = sniff_input(input, 0);
+        let outcome = sniff_input(input, Arc::new(Policy::builtin()), 0);
         assert_eq!(outcome.mime_type, Some(MimeType::ImagePng));
     }
 }

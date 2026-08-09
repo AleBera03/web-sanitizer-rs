@@ -66,6 +66,7 @@ use crate::input::InputSource;
 use crate::policy::protectedset::SkeletonSet;
 use crate::policy::{ConfigError, Policy, blockset::BlockSet};
 use crate::report::{InputReport, InputStatus, RunReport};
+use crate::sniff::AcquiredInput;
 
 #[allow(
     dead_code,
@@ -166,7 +167,7 @@ impl Engine {
     fn pipeline(&self, input: InputSource) -> Outcome {
         let source = input.describe();
         // acquire
-        let data = match self.acquire(input) {
+        let data = match self.acquire(input.clone()) {
             Ok(data) => data,
             Err((status, cause)) => {
                 return Outcome {
@@ -192,18 +193,30 @@ impl Engine {
             //call all subresource fetchers and sanitizers
         }
 
-        // Stub for now
+        let sniff_outcome = crate::engine::sniff::run(
+            AcquiredInput::new(input.clone(), data.clone()), //TODO: qua il clone serve per forza?
+            self.policy.clone(),
+            0,
+        );
+
         let bytes_in = data.len() as u64;
-        let output = data;
+        let output = sniff_outcome.output.unwrap_or_default();
+        let status = if sniff_outcome.refused {
+            InputStatus::Refused
+        } else if sniff_outcome.actions.is_empty() {
+            InputStatus::Clean
+        } else {
+            InputStatus::Sanitised
+        };
         Outcome {
             report: InputReport {
                 id: "input-0".to_string(),
                 source,
-                status: InputStatus::Clean,
+                status,
                 bytes_in,
                 bytes_out: output.len() as u64,
                 duration_ms: 0,
-                actions: Vec::new(),
+                actions: sniff_outcome.actions,
                 error: None,
             },
             sanitized: Some(output),
