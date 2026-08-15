@@ -14,6 +14,7 @@ const MAX_ENTRY_COUNT: u32 = 10_000;
 
 pub struct ZipEntry<'a> {
     pub name: &'a [u8],
+    pub name_offset: usize,
     pub compressed_size: u32,
     pub uncompressed_size: u32,
 }
@@ -62,6 +63,7 @@ pub fn entries(data: &[u8]) -> Option<Vec<ZipEntry<'_>>> {
 
         result.push(ZipEntry {
             name,
+            name_offset: name_start,
             compressed_size,
             uncompressed_size,
         });
@@ -74,34 +76,30 @@ pub fn entries(data: &[u8]) -> Option<Vec<ZipEntry<'_>>> {
 
 /// True if the archive contains a VBA project stream, the marker of an
 /// OOXML document carrying macros.
-pub fn zip_has_active_content(data: &[u8]) -> bool {
-    let Some(entries) = entries(data) else {
-        return false;
-    };
-    entries
+pub fn zip_has_active_content(data: &[u8]) -> Option<usize> {
+    entries(data)?
         .iter()
-        .any(|entry| entry.name.ends_with(VBA_PROJECT_MARKER))
+        .find(|e| e.name.ends_with(VBA_PROJECT_MARKER))
+        .map(|e| e.name_offset)
 }
 
-/// True if declared compression ratios, total uncompressed size, or entry
-/// count exceed sane bounds ("zip bomb" heuristic).
-pub fn zip_bomb_risk(data: &[u8]) -> bool {
+pub fn zip_has_dos_risk(data: &[u8]) -> Option<usize> {
     let Some(entries) = entries(data) else {
-        return true; // unreadable/malformed: treat as risky
+        return Some(0); // unreadable/malformed: treat as risky
     };
 
     let mut total_uncompressed: u64 = 0;
     for entry in &entries {
         let ratio = entry.uncompressed_size as f64 / entry.compressed_size.max(1) as f64;
         if ratio > MAX_COMPRESSION_RATIO {
-            return true;
+            return Some(entry.name_offset);
         }
         total_uncompressed += entry.uncompressed_size as u64;
         if total_uncompressed > MAX_TOTAL_UNCOMPRESSED_BYTES {
-            return true;
+            return Some(0);
         }
     }
-    false
+    None
 }
 
 /// Infers the OOXML document kind from entry name prefixes (`word/`,

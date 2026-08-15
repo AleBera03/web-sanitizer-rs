@@ -2,6 +2,7 @@ use crate::html;
 use crate::policy::Policy;
 use crate::report::SanitisationAction;
 use crate::scan::active::scan_active_content;
+use crate::scan::dos::scan_dos_risks;
 use crate::sniff::{MimeType, SniffOutcome};
 use crate::urlcheck::UrlChecker;
 
@@ -28,33 +29,58 @@ pub fn route(
             }
         }
         Some(MimeType::ApplicationPdf) | Some(MimeType::ImageTiff) => {
-            let output = sniff_outcome.output.unwrap_or_default();
-            let mime = sniff_outcome.mime_type.unwrap();
-            let sanitized = scan_active_content(output, mime);
+            let scan_outcome = scan_active_content(sniff_outcome, &policy.subresources);
             RouteOutcome {
-                output: sanitized,
-                actions: Vec::new(),
-                refused: false,
+                output: scan_outcome.output.unwrap_or_default(),
+                actions: scan_outcome.actions,
+                refused: scan_outcome.refused,
             }
         }
         Some(MimeType::ApplicationZip) => {
-            // TODO: check ratio budget (policy.budgets.max_decompress_ratio), then
-            // bounded inflate + re-sniff via a recursive route() call, capped by `depth`
-            // TODO: check for active content
+            let data = sniff_outcome.output.as_deref().unwrap_or_default();
+
+            if let Some(action) = scan_dos_risks(&SniffOutcome, &policy.subresources) {
+                return RouteOutcome {
+                    output: Vec::new(),
+                    actions: vec![action],
+                    refused: true,
+                };
+            }
+
+            let scan_outcome = scan_active_content(sniff_outcome, &policy.subresources);
             RouteOutcome {
-                output: sniff_outcome.output.unwrap_or_default(),
-                actions: Vec::new(),
-                refused: false,
+                output: scan_outcome.output.unwrap_or_default(),
+                actions: scan_outcome.actions,
+                refused: scan_outcome.refused,
             }
         }
-        Some(MimeType::ApplicationXml | MimeType::ImageSvg) => {
-            // TODO: check ratio budget (policy.budgets.max_decompress_ratio), then
-            // bounded inflate + re-sniff via a recursive route() call, capped by `depth`
-            // TODO: check for active content
+
+        Some(MimeType::ApplicationXml) => {
+            let data = sniff_outcome.output.as_deref().unwrap_or_default();
+
+            if let Some(action) = scan_dos_risk(data) {
+                //TODO pass budget policies as argument
+                return RouteOutcome {
+                    output: Vec::new(),
+                    actions: vec![action],
+                    refused: true,
+                };
+            }
+
+            let scan_outcome = scan_active_content(sniff_outcome, &policy.subresources);
             RouteOutcome {
-                output: sniff_outcome.output.unwrap_or_default(),
-                actions: Vec::new(),
-                refused: false,
+                output: scan_outcome.output.unwrap_or_default(),
+                actions: scan_outcome.actions,
+                refused: scan_outcome.refused,
+            }
+        }
+
+        Some(MimeType::ImageSvg) => {
+            let scan_outcome = scan_active_content(sniff_outcome, &policy.subresources);
+            RouteOutcome {
+                output: scan_outcome.output.unwrap_or_default(),
+                actions: scan_outcome.actions,
+                refused: scan_outcome.refused,
             }
         }
         _ => RouteOutcome {

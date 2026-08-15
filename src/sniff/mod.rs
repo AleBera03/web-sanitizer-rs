@@ -1,9 +1,10 @@
 use crate::input::InputSource;
 use crate::policy::{Action, Policy, SniffAction};
 use crate::report::{Location, SanitisationAction};
+use crate::scan::dos::zip::{OoxmlKind, zip_ooxml_kind};
 use crate::sniff::MimeType::{
-    ApplicationPdf, ApplicationZip, AudioFlac, AudioMp3, AudioWav, ImageGif, ImageJpeg, ImagePng,
-    ImageSvg, ImageTiff, ImageWebp, TextHtml, VideoAvi, VideoMp4,
+    ApplicationPdf, ApplicationXml, ApplicationZip, AudioFlac, AudioMp3, AudioWav, ImageGif,
+    ImageJpeg, ImagePng, ImageSvg, ImageTiff, ImageWebp, TextHtml, VideoAvi, VideoMp4,
 };
 
 use std::path::Path;
@@ -52,6 +53,12 @@ pub enum MimeType {
     AudioWav,
     VideoAvi,
     VideoMp4,
+    WordDocx,
+    ExcelXlsx,
+    PowerPointPptx,
+    WordDoc,
+    ExcelXls,
+    PowerPointPpt,
 }
 
 impl MimeType {
@@ -93,10 +100,11 @@ pub fn sniff_input(input: AcquiredInput, policy: Arc<Policy>, verbose: u8) -> Sn
         } else {
             None
         };
+        let original = format!("declared={:?} actual={:?}", declared_mime, actual_mime);
         return SniffOutcome {
             output,
             mime_type: actual_mime,
-            actions: vec![mismatch_action(action)],
+            actions: vec![mismatch_action(action, original)],
             refused: matches!(policy.subresources.sniff_rule, SniffAction::Reject),
         };
     }
@@ -109,7 +117,7 @@ pub fn sniff_input(input: AcquiredInput, policy: Arc<Policy>, verbose: u8) -> Sn
     }
 }
 
-fn mismatch_action(action: Action) -> SanitisationAction {
+fn mismatch_action(action: Action, original: String) -> SanitisationAction {
     SanitisationAction {
         rule_id: "sniff.mime_mismatch".to_string(),
         category: "sniff".to_string(),
@@ -117,7 +125,7 @@ fn mismatch_action(action: Action) -> SanitisationAction {
             line: 0,
             byte_offset: 0,
         },
-        original: String::new(),
+        original,
         action,
         replacement: None,
     }
@@ -156,7 +164,12 @@ fn read_actual_mime(input: &AcquiredInput) -> Option<MimeType> {
     } else if input.data.starts_with(TIFF_LE) || input.data.starts_with(TIFF_BE) {
         Some(ImageTiff)
     } else if input.data.starts_with(ZIP_OOXML) {
-        Some(ApplicationZip)
+        match zip_ooxml_kind(&input.data) {
+            Some(OoxmlKind::Word) => Some(MimeType::WordDocx),
+            Some(OoxmlKind::Excel) => Some(MimeType::ExcelXlsx),
+            Some(OoxmlKind::PowerPoint) => Some(MimeType::PowerPointPptx),
+            None => Some(MimeType::ApplicationZip),
+        }
     } else if input.data.starts_with(FLAC) {
         Some(AudioFlac)
     } else if input.data.starts_with(MP3_ID3) || input.data.starts_with(MP3_FRAME_SYNC) {
@@ -206,6 +219,8 @@ fn mime_from_extension(ext: &str) -> Option<MimeType> {
         "pdf" => Some(ApplicationPdf),
         "tif" | "tiff" => Some(ImageTiff),
         "zip" => Some(ApplicationZip),
+        "xml" => Some(ApplicationXml),
+        "flac" => Some(AudioFlac),
         _ => None,
     }
 }

@@ -191,10 +191,17 @@ pub enum SniffAction {
 pub enum ActiveContentAction {
     /// Reject subresources that contain active content
     Reject,
-    /// CDR - remove active content from the resource, if possible, otherwise reject
-    Rewrite,
     /// Flag subresources that contain active content, but do not reject them
     Allow,
+}
+
+/// Rules for subresources that might be prone to DOS attacks
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum DosDetectedAction {
+    /// Reject subresources that contain DOS risks
+    Reject,
+    /// Truncates subresources that contain DOS risks if possible
+    Truncate,
 }
 
 /// Subresources handling rules
@@ -204,6 +211,7 @@ pub struct SubresourcesRules {
     pub fetch_subresources: bool,
     pub sniff_rule: SniffAction,
     pub active_content_rule: ActiveContentAction,
+    pub dos_risk_rule: DosDetectedAction,
 }
 
 impl Default for SubresourcesRules {
@@ -212,6 +220,7 @@ impl Default for SubresourcesRules {
             fetch_subresources: false,
             sniff_rule: SniffAction::Reject,
             active_content_rule: ActiveContentAction::Reject,
+            dos_risk_rule: DosDetectedAction::Reject,
         }
     }
 }

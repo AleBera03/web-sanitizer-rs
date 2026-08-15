@@ -12,12 +12,12 @@ fn tiff_is_little_endian(data: &[u8]) -> Option<bool> {
 
 /// Walks the IFD chain checking bounds and cycles. True if the file is
 /// malformed (out-of-bounds offset, truncated entries, or a cyclic chain).
-pub fn tiff_has_structural_risk(data: &[u8]) -> bool {
+pub fn tiff_has_structural_risk(data: &[u8]) -> Option<usize> {
     let Some(little_endian) = tiff_is_little_endian(data) else {
-        return true;
+        return Some(0);
     };
     let Some(mut ifd_offset) = read_u32(data, 4, little_endian) else {
-        return true;
+        return Some(4);
     };
 
     let mut visited = std::collections::HashSet::new();
@@ -25,24 +25,24 @@ pub fn tiff_has_structural_risk(data: &[u8]) -> bool {
     while ifd_offset != 0 {
         let offset = ifd_offset as usize;
         if !visited.insert(offset) {
-            return true; // cycle
+            return Some(offset); // cycle
         }
 
         let Some(entry_count) = read_u16(data, offset, little_endian) else {
-            return true; // out of bounds
+            return Some(offset); // out of bounds
         };
 
         let entries_start = offset + 2;
         let entries_end = entries_start + entry_count as usize * TIFF_ENTRY_LEN;
         if data.get(entries_start..entries_end).is_none() {
-            return true; // entries run past end of file
+            return Some(entries_start); // entries run past end of file
         }
 
         let Some(next) = read_u32(data, entries_end, little_endian) else {
-            return true;
+            return Some(entries_end); // next IFD offset out of bounds
         };
         ifd_offset = next;
     }
 
-    false
+    None
 }

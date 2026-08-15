@@ -17,3 +17,15 @@ pub(crate) fn read_u32(data: &[u8], offset: usize, little_endian: bool) -> Optio
         u32::from_be_bytes([b[0], b[1], b[2], b[3]])
     })
 }
+
+/// Checks if `needle` is present in `haystack`.
+pub(crate) fn contains_bytes(haystack: &[u8], needle: &[u8]) -> bool {
+    haystack
+        .windows(needle.len())
+        .any(|window| window == needle)
+}
+
+/// Returns position of needle or none if not found
+pub fn find_bytes(haystack: &[u8], needle: &[u8]) -> Option<usize> {
+    haystack.windows(needle.len()).position(|w| w == needle)
+}
