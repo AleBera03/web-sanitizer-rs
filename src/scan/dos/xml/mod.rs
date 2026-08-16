@@ -149,3 +149,48 @@ pub fn xml_has_dos_risk(data: &[u8]) -> Option<usize> {
             .then_some(0)
     })
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn xml_doc(inner: &str) -> Vec<u8> {
+        format!("<?xml version=\"1.0\"?><root>{inner}</root>").into_bytes()
+    }
+
+    #[test]
+    fn xml_has_active_content_detects_entity_declarations() {
+        let payload = br#"<?xml version="1.0"?><!DOCTYPE root [<!ENTITY x "hello">]><root>&x;</root>"#;
+        assert_eq!(xml_has_active_content(payload), Some(0));
+    }
+
+    #[test]
+    fn xml_has_active_content_ignores_plain_xml() {
+        let payload = xml_doc("safe content");
+        assert_eq!(xml_has_active_content(&payload), None);
+    }
+
+    #[test]
+    fn xml_has_active_content_detects_external_entity_markers() {
+        let payload = br#"<?xml version="1.0"?><!DOCTYPE root [<!ENTITY x SYSTEM "file:///etc/passwd">]><root/>"#;
+        assert_eq!(xml_has_active_content(payload), Some(0));
+    }
+
+    #[test]
+    fn xml_has_dos_risk_returns_none_for_safe_xml() {
+        let payload = xml_doc("normal-text");
+        assert_eq!(xml_has_dos_risk(&payload), None);
+    }
+
+    #[test]
+    fn xml_has_dos_risk_detects_recursive_entity_expansion() {
+        let payload = br#"<?xml version="1.0"?><!DOCTYPE root [<!ENTITY a "&b;"> <!ENTITY b "&a;">]><root>&a;</root>"#;
+        assert_eq!(xml_has_dos_risk(payload), Some(0));
+    }
+
+    #[test]
+    fn xml_has_dos_risk_treats_malformed_entity_blocks_as_risky() {
+        let payload = br#"<?xml version="1.0"?><!DOCTYPE root [<!ENTITY a "&b;"> <!ENTITY b "&a;">]"#;
+        assert_eq!(xml_has_dos_risk(payload), Some(0));
+    }
+}

@@ -195,15 +195,6 @@ pub enum ActiveContentAction {
     Allow,
 }
 
-/// Rules for subresources that might be prone to DOS attacks
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-pub enum DosDetectedAction {
-    /// Reject subresources that contain DOS risks
-    Reject,
-    /// Truncates subresources that contain DOS risks if possible
-    Truncate,
-}
-
 /// Subresources handling rules
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
@@ -211,7 +202,6 @@ pub struct SubresourcesRules {
     pub fetch_subresources: bool,
     pub sniff_rule: SniffAction,
     pub active_content_rule: ActiveContentAction,
-    pub dos_risk_rule: DosDetectedAction,
 }
 
 impl Default for SubresourcesRules {
@@ -220,7 +210,6 @@ impl Default for SubresourcesRules {
             fetch_subresources: false,
             sniff_rule: SniffAction::Reject,
             active_content_rule: ActiveContentAction::Reject,
-            dos_risk_rule: DosDetectedAction::Reject,
         }
     }
 }

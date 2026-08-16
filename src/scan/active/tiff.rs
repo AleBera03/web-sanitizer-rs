@@ -46,3 +46,49 @@ pub fn tiff_has_structural_risk(data: &[u8]) -> Option<usize> {
 
     None
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn tiff_little_endian_with_no_structural_risk_returns_none() {
+        
+    }
+
+    #[test]
+    fn tiff_big_endian_with_no_structural_risk_returns_none() {
+
+    }
+
+    #[test]
+    fn tiff_with_malformed_header_returns_offset_0() {
+
+    }
+
+    #[test]
+    fn tiff_too_short_for_ifd_pointer_returns_offset_4() {
+
+    }
+
+    #[test]
+    fn tiff_with_cycles_returns_offset() {
+
+    }
+
+    #[test]
+    fn tiff_ifd_pointer_beyond_file_length_returns_offset() { } {
+
+    }
+
+    #[test]
+    fn tiff_with_entries_past_eof_returns_offset() {
+
+    }
+
+    #[test]
+    fn tiff_with_next_ifd_pointer_oob_returns_offset() {
+
+    }
+
+}

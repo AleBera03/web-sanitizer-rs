@@ -1,5 +1,5 @@
 use crate::input::InputSource;
-use crate::policy::{Action, Policy, SniffAction};
+use crate::policy::{Action, SniffAction, SubresourcesRules};
 use crate::report::{Location, SanitisationAction};
 use crate::scan::dos::zip::{OoxmlKind, zip_ooxml_kind};
 use crate::sniff::MimeType::{
@@ -8,7 +8,6 @@ use crate::sniff::MimeType::{
 };
 
 use std::path::Path;
-use std::sync::Arc;
 use url::Url;
 
 // CONSTANTS
@@ -61,11 +60,7 @@ pub enum MimeType {
     PowerPointPpt,
 }
 
-impl MimeType {
-    pub fn may_carry_active_content(self) -> bool {
-        matches!(self, MimeType::ApplicationPdf | MimeType::ImageTiff)
-    }
-}
+
 
 pub struct AcquiredInput {
     pub source: InputSource,
@@ -85,17 +80,17 @@ pub struct SniffOutcome {
     pub refused: bool,
 }
 
-pub fn sniff_input(input: AcquiredInput, policy: Arc<Policy>, verbose: u8) -> SniffOutcome {
+pub fn sniff_input(input: AcquiredInput, rules: &SubresourcesRules, verbose: u8) -> SniffOutcome {
     let _ = verbose;
     let declared_mime = read_declared_mime(&input);
     let actual_mime = read_actual_mime(&input);
 
     if declared_mime != actual_mime {
-        let action = match policy.subresources.sniff_rule {
+        let action = match rules.sniff_rule {
             SniffAction::Reject => Action::Refuse,
             SniffAction::Rewrite => Action::Rewrite,
         };
-        let output = if matches!(policy.subresources.sniff_rule, SniffAction::Rewrite) {
+        let output = if matches!(rules.sniff_rule, SniffAction::Rewrite) {
             Some(input.data.clone())
         } else {
             None
@@ -105,7 +100,7 @@ pub fn sniff_input(input: AcquiredInput, policy: Arc<Policy>, verbose: u8) -> Sn
             output,
             mime_type: actual_mime,
             actions: vec![mismatch_action(action, original)],
-            refused: matches!(policy.subresources.sniff_rule, SniffAction::Reject),
+            refused: matches!(rules.sniff_rule, SniffAction::Reject),
         };
     }
 
@@ -310,6 +305,46 @@ mod tests {
     }
 
     #[test]
+    fn detects_flac_mp3_wav_avi_and_mp4() {
+        assert_eq!(
+            read_actual_mime(&bytes_input("x", b"fLaC\x00\x00\x00")),
+            Some(MimeType::AudioFlac)
+        );
+        assert_eq!(
+            read_actual_mime(&bytes_input("x", b"ID3\x03\x00\x00")),
+            Some(MimeType::AudioMp3)
+        );
+        assert_eq!(
+            read_actual_mime(&bytes_input("x", b"\xFF\xFB\x90\x00\x00")),
+            Some(MimeType::AudioMp3)
+        );
+        assert_eq!(
+            read_actual_mime(&bytes_input("x", b"RIFF\x24\x00\x00\x00WAVE")),
+            Some(MimeType::AudioWav)
+        );
+        assert_eq!(
+            read_actual_mime(&bytes_input("x", b"AVI ")),
+            Some(MimeType::VideoAvi)
+        );
+        assert_eq!(
+            read_actual_mime(&bytes_input("x", b"\x00\x00\x00\x00ftypmp41")),
+            Some(MimeType::VideoMp4)
+        );
+    }
+
+    #[test]
+    fn detects_xml_and_svg() {
+        assert_eq!(
+            read_actual_mime(&bytes_input("x", b"<?xml version=\"1.0\"?><root/>")),
+            Some(MimeType::ApplicationXml)
+        );
+        assert_eq!(
+            read_actual_mime(&bytes_input("x", b"<svg xmlns=\"http://www.w3.org/2000/svg\"></svg>")),
+            Some(MimeType::ImageSvg)
+        );
+    }
+
+    #[test]
     fn unrecognised_bytes_yield_none() {
         let input = bytes_input("x", b"not a known format");
         assert_eq!(read_actual_mime(&input), None);
@@ -363,6 +398,18 @@ mod tests {
     }
 
     #[test]
+    fn declared_mime_supports_svg_html_pdf_and_media_extensions() {
+        assert_eq!(read_declared_mime(&bytes_input("page.html", b"")), Some(MimeType::TextHtml));
+        assert_eq!(read_declared_mime(&bytes_input("doc.pdf", b"")), Some(MimeType::ApplicationPdf));
+        assert_eq!(read_declared_mime(&bytes_input("icon.svg", b"")), Some(MimeType::ImageSvg));
+        assert_eq!(read_declared_mime(&bytes_input("song.flac", b"")), Some(MimeType::AudioFlac));
+        assert_eq!(read_declared_mime(&bytes_input("track.mp3", b"")), Some(MimeType::AudioMp3));
+        assert_eq!(read_declared_mime(&bytes_input("clip.wav", b"")), Some(MimeType::AudioWav));
+        assert_eq!(read_declared_mime(&bytes_input("video.mp4", b"")), Some(MimeType::VideoMp4));
+        assert_eq!(read_declared_mime(&bytes_input("data.xml", b"")), Some(MimeType::ApplicationXml));
+    }
+
+    #[test]
     fn unrecognised_extension_is_none() {
         let input = bytes_input("archive.rar", b"");
         assert_eq!(read_declared_mime(&input), None);
@@ -373,14 +420,16 @@ mod tests {
     #[test]
     fn sniff_input_reports_detected_mime_type() {
         let input = bytes_input("photo.jpg", &[0xFF, 0xD8, 0xFF, 0x00]);
-        let outcome = sniff_input(input, Arc::new(Policy::builtin()), 0);
+        let rules = SubresourcesRules::default();
+        let outcome = sniff_input(input, &rules, 0);
         assert_eq!(outcome.mime_type, Some(MimeType::ImageJpeg));
     }
 
     #[test]
     fn sniff_input_on_unrecognised_bytes_has_no_mime_type() {
         let input = bytes_input("x", b"not a known format");
-        let outcome = sniff_input(input, Arc::new(Policy::builtin()), 0);
+        let rules = SubresourcesRules::default();
+        let outcome = sniff_input(input, &rules, 0);
         assert_eq!(outcome.mime_type, None);
     }
 
@@ -390,7 +439,8 @@ mod tests {
             "fake.jpg",
             &[0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A],
         );
-        let outcome = sniff_input(input, Arc::new(Policy::builtin()), 0);
+        let rules = SubresourcesRules::default();
+        let outcome = sniff_input(input, &rules, 0);
         assert_eq!(outcome.mime_type, Some(MimeType::ImagePng));
     }
 }
