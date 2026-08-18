@@ -14,7 +14,7 @@ static NEUTRAL_URL_RULES: LazyLock<UrlRules> = LazyLock::new(UrlRules::default);
 
 /// Detection-only pass: uses maximally restrictive rules (no allow-lists),
 /// so any script/handler/dangerous-scheme construct is flagged regardless
-/// of the caller's actual policy. Presence, not policy decision.
+/// of the caller's actual policy
 pub fn svg_has_active_content(data: &[u8]) -> Vec<SanitisationAction> {
     let rules = HtmlRules::default();
     let checker = UrlChecker::new(
@@ -29,4 +29,30 @@ pub fn svg_has_active_content(data: &[u8]) -> Vec<SanitisationAction> {
         .into_iter()
         .filter(|a| a.category == "xss")
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn clean_svg_produces_no_actions() {
+        let svg = br#"<svg xmlns="http://www.w3.org/2000/svg"><circle r="5"/></svg>"#;
+        assert!(svg_has_active_content(svg).is_empty());
+    }
+
+    #[test]
+    fn svg_with_inline_script_is_detected() {
+        let svg = br#"<svg xmlns="http://www.w3.org/2000/svg"><script>alert(1)</script></svg>"#;
+        let actions = svg_has_active_content(svg);
+        assert!(!actions.is_empty());
+        assert!(actions.iter().all(|a| a.category == "xss"));
+    }
+
+    #[test]
+    fn svg_with_event_handler_is_detected() {
+        let svg = br#"<svg onload="alert(1)" xmlns="http://www.w3.org/2000/svg"></svg>"#;
+        let actions = svg_has_active_content(svg);
+        assert!(!actions.is_empty());
+    }
 }

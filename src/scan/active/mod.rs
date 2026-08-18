@@ -86,3 +86,230 @@ fn single_action(rule_id: &str, offset: usize, data: &[u8]) -> SanitisationActio
         replacement: None,
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::policy::ActiveContentAction;
+
+    fn default_rules() -> SubresourcesRules {
+        SubresourcesRules::default()
+    }
+
+    fn allow_rules() -> SubresourcesRules {
+        SubresourcesRules {
+            active_content_rule: ActiveContentAction::Allow,
+            ..Default::default()
+        }
+    }
+
+    fn reject_rules() -> SubresourcesRules {
+        SubresourcesRules {
+            active_content_rule: ActiveContentAction::Reject,
+            ..Default::default()
+        }
+    }
+
+    fn sniff_outcome(mime_type: Option<MimeType>, data: Vec<u8>) -> SniffOutcome {
+        SniffOutcome {
+            output: Some(data),
+            mime_type,
+            actions: Vec::new(),
+            refused: false,
+        }
+    }
+
+    #[test]
+    fn clean_content_returns_output_with_no_actions() {
+        let data = vec![1, 2, 3, 4, 5];
+        let outcome = sniff_outcome(None, data.clone());
+        let rules = default_rules();
+
+        let result = scan_active_content(outcome, &rules);
+
+        assert_eq!(result.output, Some(data));
+        assert!(result.actions.is_empty());
+        assert!(!result.refused);
+    }
+
+    #[test]
+    fn unsupported_mime_type_returns_clean() {
+        let data = vec![1, 2, 3];
+        let outcome = sniff_outcome(Some(MimeType::TextHtml), data.clone());
+        let rules = default_rules();
+
+        let result = scan_active_content(outcome, &rules);
+
+        assert_eq!(result.output, Some(data));
+        assert!(result.actions.is_empty());
+        assert!(!result.refused);
+    }
+
+    #[test]
+    fn none_mime_type_returns_clean() {
+        let data = vec![1, 2, 3];
+        let outcome = sniff_outcome(None, data.clone());
+        let rules = default_rules();
+
+        let result = scan_active_content(outcome, &rules);
+
+        assert_eq!(result.output, Some(data));
+        assert!(result.actions.is_empty());
+        assert!(!result.refused);
+    }
+
+    #[test]
+    fn pdf_with_active_content_reject_policy() {
+        let data = b"%PDF-1.7\n3 0 obj\n<< /S /JavaScript /JS (app.alert('hi');) >>\nendobj".to_vec();
+        let outcome = sniff_outcome(Some(MimeType::ApplicationPdf), data);
+        let rules = reject_rules();
+
+        let result = scan_active_content(outcome, &rules);
+
+        assert!(result.refused);
+        assert_eq!(result.output, None);
+        assert_eq!(result.actions.len(), 1);
+        assert_eq!(result.actions[0].rule_id, "scan.pdf.active_content");
+        assert_eq!(result.actions[0].action, Action::Refuse);
+        assert_eq!(result.actions[0].category, "active_content");
+    }
+
+    #[test]
+    fn pdf_with_active_content_allow_policy() {
+        let data = b"%PDF-1.7\n3 0 obj\n<< /S /JavaScript /JS (app.alert('hi');) >>\nendobj".to_vec();
+        let outcome = sniff_outcome(Some(MimeType::ApplicationPdf), data.clone());
+        let rules = allow_rules();
+
+        let result = scan_active_content(outcome, &rules);
+
+        assert!(!result.refused);
+        assert_eq!(result.output, Some(data));
+        assert_eq!(result.actions.len(), 1);
+        assert_eq!(result.actions[0].rule_id, "scan.pdf.active_content");
+        assert_eq!(result.actions[0].action, Action::Allow);
+    }
+
+    #[test]
+    fn clean_pdf_has_no_actions() {
+        let data = b"%PDF-1.7\n1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n%%EOF".to_vec();
+        let outcome = sniff_outcome(Some(MimeType::ApplicationPdf), data.clone());
+        let rules = default_rules();
+
+        let result = scan_active_content(outcome, &rules);
+
+        assert_eq!(result.output, Some(data));
+        assert!(result.actions.is_empty());
+        assert!(!result.refused);
+    }
+
+    #[test]
+    fn svg_with_active_content_detected() {
+        // SVG with script tag
+        let data = b"<svg><script>alert('xss')</script></svg>".to_vec();
+        let outcome = sniff_outcome(Some(MimeType::ImageSvg), data);
+        let rules = reject_rules();
+
+        let result = scan_active_content(outcome, &rules);
+
+        assert!(result.refused);
+        assert_eq!(result.output, None);
+        assert!(!result.actions.is_empty());
+    }
+
+    #[test]
+    fn clean_svg_has_no_actions() {
+        let data = b"<svg><circle cx='50' cy='50' r='40'/></svg>".to_vec();
+        let outcome = sniff_outcome(Some(MimeType::ImageSvg), data.clone());
+        let rules = default_rules();
+
+        let result = scan_active_content(outcome, &rules);
+
+        assert_eq!(result.output, Some(data));
+        assert!(result.actions.is_empty());
+        assert!(!result.refused);
+    }
+
+    #[test]
+    fn empty_input_is_handled() {
+        let data = Vec::new();
+        let outcome = sniff_outcome(Some(MimeType::ApplicationPdf), data);
+        let rules = default_rules();
+
+        let result = scan_active_content(outcome, &rules);
+
+        assert_eq!(result.output, Some(Vec::new()));
+        assert!(result.actions.is_empty());
+    }
+
+    #[test]
+    fn none_output_in_sniff_outcome() {
+        let outcome = SniffOutcome {
+            output: None,
+            mime_type: Some(MimeType::ApplicationPdf),
+            actions: Vec::new(),
+            refused: false,
+        };
+        let rules = default_rules();
+
+        let result = scan_active_content(outcome, &rules);
+
+        assert_eq!(result.output, Some(Vec::new()));
+        assert!(result.actions.is_empty());
+        assert!(!result.refused);
+    }
+
+    #[test]
+    fn action_has_correct_location() {
+        let data = b"prefixAAAA/JavaScript/suffix".to_vec();
+        let outcome = sniff_outcome(Some(MimeType::ApplicationPdf), data);
+        let rules = default_rules();
+
+        let result = scan_active_content(outcome, &rules);
+
+        if let Some(action) = result.actions.first() {
+            assert_eq!(action.category, "active_content");
+            assert_eq!(action.location.line, 0);
+            assert!(action.location.byte_offset > 0);
+        }
+    }
+
+    #[test]
+    fn multiple_actions_policy_updated() {
+        // SVG can produce multiple actions (e.g., script + event handler)
+        let data = b"<svg><script>alert('xss')</script><circle onclick='hack()'/></svg>".to_vec();
+        let outcome = sniff_outcome(Some(MimeType::ImageSvg), data.clone());
+        let rules = allow_rules();
+
+        let result = scan_active_content(outcome, &rules);
+
+        // All actions should have the Allow policy applied
+        for action in &result.actions {
+            assert_eq!(action.action, Action::Allow);
+        }
+        assert!(!result.refused);
+        assert_eq!(result.output, Some(data));
+    }
+
+    #[test]
+    fn single_action_creates_correct_sanitisation_action() {
+        let data = b"test/JavaScripttest";
+        let offset = 5;
+        let action = single_action("test.rule", offset, data);
+
+        assert_eq!(action.rule_id, "test.rule");
+        assert_eq!(action.category, "active_content");
+        assert_eq!(action.location.line, 0);
+        assert_eq!(action.location.byte_offset, 5);
+        assert_eq!(action.action, Action::Allow);
+        assert_eq!(action.replacement, None);
+    }
+
+    #[test]
+    fn single_action_truncates_long_fragments() {
+        let long_data = vec![b'A'; 1000];
+        let action = single_action("test.rule", 0, &long_data);
+
+        // original should be truncated to MAX_FRAGMENT_BYTES or less
+        assert!(action.original.len() <= MAX_FRAGMENT_BYTES);
+    }
+}
