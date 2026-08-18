@@ -6,7 +6,7 @@ use crate::scan::utilities::find_bytes;
 const XML_ENTITY_DECL: &[u8] = b"<!ENTITY";
 const XML_ENTITY_SYSTEM: &[u8] = b"SYSTEM";
 const XML_ENTITY_PUBLIC: &[u8] = b"PUBLIC";
-// constants - limits for the XML entity expansion to prevent DoS attacks (spostare dentro policy?)
+// constants - limits for the XML entity expansion to prevent DoS attacks (move into policy?)
 const MAX_ENTITY_DEPTH: usize = 20;
 const MAX_EXPANDED_SIZE: u64 = 10 * 1024 * 1024; // 10 MiB, arbitrary sane cap
 const MAX_ENTITY_COUNT: usize = 10_000;
@@ -160,7 +160,8 @@ mod tests {
 
     #[test]
     fn xml_has_active_content_detects_entity_declarations() {
-        let payload = br#"<?xml version="1.0"?><!DOCTYPE root [<!ENTITY x "hello">]><root>&x;</root>"#;
+        let payload =
+            br#"<?xml version="1.0"?><!DOCTYPE root [<!ENTITY x "hello">]><root>&x;</root>"#;
         assert_eq!(xml_has_active_content(payload), Some(0));
     }
 
@@ -190,7 +191,8 @@ mod tests {
 
     #[test]
     fn xml_has_dos_risk_treats_malformed_entity_blocks_as_risky() {
-        let payload = br#"<?xml version="1.0"?><!DOCTYPE root [<!ENTITY a "&b;"> <!ENTITY b "&a;">]"#;
+        let payload =
+            br#"<?xml version="1.0"?><!DOCTYPE root [<!ENTITY a "&b;"> <!ENTITY b "&a;">]"#;
         assert_eq!(xml_has_dos_risk(payload), Some(0));
     }
 }

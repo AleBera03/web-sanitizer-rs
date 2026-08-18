@@ -17,7 +17,7 @@ pub fn scan_dos_risks(input: &SniffOutcome) -> Option<SanitisationAction> {
         Some(MimeType::ApplicationZip) => {
             zip_has_dos_risk(&data).map(|o| ("scan.zip.bomb_risk", o))?
         }
-        _ =>  return None,
+        _ => return None,
     };
 
     let fragment_end = (offset + MAX_FRAGMENT_BYTES).min(data.len());
@@ -29,13 +29,15 @@ pub fn scan_dos_risks(input: &SniffOutcome) -> Option<SanitisationAction> {
     Some(SanitisationAction {
         rule_id: rule_id.to_string(),
         category: "dos".to_string(),
-        location: Location { line: 0, byte_offset: offset as u64 },
+        location: Location {
+            line: 0,
+            byte_offset: offset as u64,
+        },
         original,
-        action: Action::Refuse, 
+        action: Action::Refuse,
         replacement: None,
     })
 }
-
 
 #[cfg(test)]
 mod tests {
@@ -58,7 +60,10 @@ mod tests {
 
     #[test]
     fn xml_with_dos_risk_returns_refuse_action() {
-        let outcome = sniff_outcome(MimeType::ApplicationXml, /* TODO payload billion-laughs */ b"...");
+        let outcome = sniff_outcome(
+            MimeType::ApplicationXml,
+            /* TODO payload billion-laughs */ b"...",
+        );
         let action = scan_dos_risks(&outcome).expect("expected a DOS action");
         assert_eq!(action.rule_id, "scan.xml.entity_expansion");
         assert_eq!(action.category, "dos");
@@ -67,7 +72,10 @@ mod tests {
 
     #[test]
     fn zip_with_dos_risk_returns_refuse_action() {
-        let outcome = sniff_outcome(MimeType::ApplicationZip, /* TODO zip-bomb metadata */ &[]);
+        let outcome = sniff_outcome(
+            MimeType::ApplicationZip,
+            /* TODO zip-bomb metadata */ &[],
+        );
         let action = scan_dos_risks(&outcome).expect("expected a DOS action");
         assert_eq!(action.rule_id, "scan.zip.bomb_risk");
     }
@@ -86,6 +94,6 @@ mod tests {
             actions: Vec::new(),
             refused: false,
         };
-        assert!(scan_dos_risks(&outcome).is_none()); 
+        assert!(scan_dos_risks(&outcome).is_none());
     }
 }

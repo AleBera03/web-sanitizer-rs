@@ -53,6 +53,7 @@ pub struct Policy {
     pub fetch: FetchPolicy,
     pub input: InputRules,
     pub subresources: SubresourcesRules,
+    pub ssrf: SsrfRules,
     #[serde(skip)]
     pub source: PolicySource,
 }
@@ -112,7 +113,7 @@ impl Default for UrlRules {
     }
 }
 
-/// Per-input resource budgets (spec TC-8). Exceeding any budget aborts that
+/// Per-input resource budgets. Exceeding any budget aborts that
 /// input with `budget_exceeded`; the batch continues.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
@@ -195,21 +196,108 @@ pub enum ActiveContentAction {
     Allow,
 }
 
-/// Subresources handling rules
+/// Rules for subresources that might be prone to DOS attacks
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum DosDetectedAction {
+    /// Reject subresources that contain DOS risks
+    Reject,
+    /// Truncates subresources that contain DOS risks if possible
+    Truncate,
+}
+
+/// Kinds of reference the sub-resource loop is allowed to fetch. The set is
+/// matched against the *sniffed* type of the body, never against the reference
+/// that produced it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum SubresourceType {
+    Css,
+    Js,
+    Image,
+}
+
+/// Subresources handling rules. Fetching is off by default: the
+/// project brief calls it optional, and optional means the user asks for it.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct SubresourcesRules {
     pub fetch_subresources: bool,
+    /// Zero disables the loop entirely. Any other value fetches at depth 1
+    /// only: a fetched sub-resource has its own references inspected, never
+    /// followed.
+    pub max_depth: u32,
+    /// Requests per parent input.
+    pub max_requests: u32,
+    /// Bytes summed over every sub-resource of one parent input.
+    pub max_total_bytes: u64,
+    pub types: Vec<SubresourceType>,
     pub sniff_rule: SniffAction,
     pub active_content_rule: ActiveContentAction,
+    pub dos_risk_rule: DosDetectedAction,
+    /// Point the sanitised parent at the local sanitised copies.
+    pub rewrite_refs: bool,
+    /// What happens to the reference of a sub-resource that was refused.
+    pub action_refused: Action,
 }
 
 impl Default for SubresourcesRules {
     fn default() -> Self {
         SubresourcesRules {
             fetch_subresources: false,
+            max_depth: 1,
+            max_requests: 32,
+            max_total_bytes: 50 * 1024 * 1024,
+            types: vec![
+                SubresourceType::Css,
+                SubresourceType::Js,
+                SubresourceType::Image,
+            ],
             sniff_rule: SniffAction::Reject,
             active_content_rule: ActiveContentAction::Reject,
+            dos_risk_rule: DosDetectedAction::Reject,
+            rewrite_refs: true,
+            action_refused: Action::Rewrite,
+        }
+    }
+}
+
+/// Which requests the SSRF guard applies to when the URL is the *input* rather
+/// than something a document asked for (spec T-11.7).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum GuardScope {
+    /// The user's own URL is never second-guessed.
+    Never,
+    /// Guarded only in server mode, where the URL arrives from a caller.
+    Server,
+    Always,
+}
+
+/// SSRF guard configuration (spec TC-11). The guard itself is always on;
+/// what stays configurable is its scope over input URLs and the narrow
+/// exemptions below.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct SsrfRules {
+    pub guard_input_urls: GuardScope,
+    /// A sub-resource served by the parent's own endpoint stays reachable.
+    pub same_origin_exemption: bool,
+    /// Hosts or CIDRs that bypass the deny table; compiled at engine start.
+    pub allow_hosts: Vec<String>,
+    /// Site-specific CIDRs added to the built-in deny table.
+    pub deny_extra: Vec<String>,
+    /// Freshness of a positive resolve verdict. Denies never expire.
+    pub allow_ttl_ms: u64,
+}
+
+impl Default for SsrfRules {
+    fn default() -> Self {
+        SsrfRules {
+            guard_input_urls: GuardScope::Server,
+            same_origin_exemption: true,
+            allow_hosts: Vec::new(),
+            deny_extra: Vec::new(),
+            allow_ttl_ms: 30_000,
         }
     }
 }
@@ -243,6 +331,13 @@ pub enum ConfigError {
     Blocklist {
         path: PathBuf,
         line: Option<usize>,
+        message: String,
+    },
+
+    #[error("invalid ssrf.{field} entry `{entry}`: {message}")]
+    Ssrf {
+        field: &'static str,
+        entry: String,
         message: String,
     },
 }
@@ -288,6 +383,61 @@ mod tests {
         assert_eq!(p.urls.placeholder_url, "#blocked");
         assert_eq!(p.input.extensions, ["html", "htm"]);
         assert_eq!(p.source, PolicySource::Builtin);
+    }
+
+    #[test]
+    fn subresource_and_ssrf_defaults_match_spec_tc10_tc11() {
+        let p = Policy::builtin();
+        assert!(!p.subresources.fetch_subresources); // opt-in, never assumed
+        assert_eq!(p.subresources.max_depth, 1);
+        assert_eq!(p.subresources.max_requests, 32);
+        assert_eq!(p.subresources.max_total_bytes, 50 * 1024 * 1024);
+        assert_eq!(
+            p.subresources.types,
+            [
+                SubresourceType::Css,
+                SubresourceType::Js,
+                SubresourceType::Image
+            ]
+        );
+        assert!(p.subresources.rewrite_refs);
+        assert_eq!(p.subresources.action_refused, Action::Rewrite);
+
+        assert_eq!(p.ssrf.guard_input_urls, GuardScope::Server);
+        assert!(p.ssrf.same_origin_exemption);
+        assert_eq!(p.ssrf.allow_ttl_ms, 30_000);
+        assert!(p.ssrf.allow_hosts.is_empty());
+        assert!(p.ssrf.deny_extra.is_empty());
+    }
+
+    #[test]
+    fn ssrf_section_is_configurable_from_toml() {
+        let p: Policy = toml::from_str(
+            r#"
+            [ssrf]
+            guard_input_urls = "always"
+            allow_hosts = ["intranet.local", "10.1.0.0/16"]
+            allow_ttl_ms = 1000
+
+            [subresources]
+            fetch_subresources = true
+            types = ["css"]
+            "#,
+        )
+        .unwrap();
+        assert_eq!(p.ssrf.guard_input_urls, GuardScope::Always);
+        assert_eq!(p.ssrf.allow_hosts, ["intranet.local", "10.1.0.0/16"]);
+        assert_eq!(p.ssrf.allow_ttl_ms, 1_000);
+        assert!(p.subresources.fetch_subresources);
+        assert_eq!(p.subresources.types, [SubresourceType::Css]);
+        // untouched keys keep their defaults
+        assert_eq!(p.subresources.max_requests, 32);
+        assert!(p.ssrf.same_origin_exemption);
+    }
+
+    #[test]
+    fn unknown_guard_scope_is_rejected() {
+        assert!(toml::from_str::<Policy>("[ssrf]\nguard_input_urls = \"sometimes\"\n").is_err());
     }
 
     #[test]

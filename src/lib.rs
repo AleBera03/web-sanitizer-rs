@@ -14,8 +14,11 @@ pub mod sniff;
 pub mod tests_helper;
 pub mod urlcheck;
 
+pub use engine::subresource::Asset;
 pub use engine::{Engine, Outcome};
-pub use html::{HtmlOutcome, sanitize_html};
+pub use fetch::guard::{FetchContext, FetchOrigin, Guard};
+pub use html::{HtmlOutcome, Reference, sanitize_html};
+pub use input::{InputSource, OutputName};
 pub use policy::Policy;
 pub use report::{InputReport, RunReport};
 // pub use scan::{ScanOutcome, scan_content};

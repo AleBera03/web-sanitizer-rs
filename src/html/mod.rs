@@ -31,6 +31,7 @@
 //! | control-char / host-split | `url.malformed` | `malformed` |
 
 mod entity;
+mod references;
 
 use std::cell::{Cell, RefCell};
 
@@ -40,6 +41,8 @@ use lol_html::{HandlerTypes, HtmlRewriter, Settings, element};
 use crate::policy::{Action, HtmlRules};
 use crate::report::{Location, MAX_FRAGMENT_BYTES, SanitisationAction, truncate_fragment};
 use crate::urlcheck::{UrlChecker, Verdict};
+
+pub use references::{Reference, rewrite_references};
 
 // CONSTANTS
 const CATEGORY_XSS: &str = "xss";
@@ -56,6 +59,11 @@ pub struct HtmlOutcome {
     /// A rule whose policy action is `refuse` fired, or the rewriter failed:
     /// the engine (step 8) turns this into a `refused` input status.
     pub refused: bool,
+    /// Sub-resource references that survived sanitisation, in document order.
+    /// Collected always, fetched only when the user asked for it.
+    pub references: Vec<Reference>,
+    /// `<base href>` of the document, which the references resolve against.
+    pub base: Option<String>,
 }
 
 /// sanitize `input` as HTML under `rules`, returning the rewritten bytes and a
@@ -75,6 +83,8 @@ pub fn sanitize_html(input: &[u8], rules: &HtmlRules, url: &UrlChecker) -> HtmlO
         newlines: &newlines,
         actions: RefCell::new(Vec::new()),
         refused: Cell::new(false),
+        references: RefCell::new(Vec::new()),
+        base: RefCell::new(None),
     };
 
     let mut output: Vec<u8> = Vec::with_capacity(input.len());
@@ -102,12 +112,16 @@ pub fn sanitize_html(input: &[u8], rules: &HtmlRules, url: &UrlChecker) -> HtmlO
             output: Vec::new(),
             actions: ctx.actions.into_inner(),
             refused: true,
+            references: Vec::new(),
+            base: None,
         };
     }
     HtmlOutcome {
         output,
         actions: ctx.actions.into_inner(),
         refused: ctx.refused.get(),
+        references: ctx.references.into_inner(),
+        base: ctx.base.into_inner(),
     }
 }
 
@@ -121,6 +135,8 @@ struct Ctx<'a> {
     newlines: &'a [usize],
     actions: RefCell<Vec<SanitisationAction>>,
     refused: Cell<bool>,
+    references: RefCell<Vec<Reference>>,
+    base: RefCell<Option<String>>,
 }
 
 impl Ctx<'_> {
@@ -140,6 +156,9 @@ impl Ctx<'_> {
         self.strip_event_handlers(el);
         self.neutralise_dangerous_schemes(el);
         self.url_check(el);
+        // last, so what is collected is what survived every rule: a reference
+        // already rewritten to the placeholder is not a reference any more
+        references::collect(el, &self.references, &self.base);
     }
 
     /// Remove a `<script>` unless its `src` origin is allow-listed. An
@@ -428,15 +447,15 @@ fn origin_allowed(url_str: &str, allowlist: &[String]) -> bool {
     }
 }
 
+/// Shared fixtures for the tests of this module and of its children.
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests_support {
     use std::sync::LazyLock;
 
     use super::*;
     use crate::policy::UrlRules;
     use crate::policy::blockset::BlockSet;
     use crate::policy::protectedset::SkeletonSet;
-    use crate::tests_helper::set_from::SetFrom;
     use crate::urlcheck::cache::VerdictCache;
 
     static EMPTY_BLOCKSET: LazyLock<BlockSet> = LazyLock::new(BlockSet::default);
@@ -444,19 +463,43 @@ mod tests {
     static DEFAULT_VERDICTCACHE: LazyLock<VerdictCache> = LazyLock::new(VerdictCache::default);
     static DEFAULT_RULES: LazyLock<UrlRules> = LazyLock::new(UrlRules::default);
 
-    const FRAME_PLACEHOLDER: &str = "<div class=\"sanitized-placeholder\"></div>";
-
     /// A URL checker that never fires: empty block-list, no protected domains.
-    fn no_url_checker() -> UrlChecker<'static> {
-        UrlChecker::new(&EMPTY_BLOCKSET, &EMPTY_SKELETONSET, &DEFAULT_VERDICTCACHE, &DEFAULT_RULES)
+    pub fn no_url_checker() -> UrlChecker<'static> {
+        UrlChecker::new(
+            &EMPTY_BLOCKSET,
+            &EMPTY_SKELETONSET,
+            &DEFAULT_VERDICTCACHE,
+            &DEFAULT_RULES,
+        )
     }
 
-    fn run(html: &str) -> HtmlOutcome {
+    pub fn sanitize_default(html: &str) -> HtmlOutcome {
         sanitize_html(html.as_bytes(), &HtmlRules::default(), &no_url_checker())
     }
 
-    fn run_with(html: &str, rules: &HtmlRules) -> HtmlOutcome {
+    pub fn sanitize_with(html: &str, rules: &HtmlRules) -> HtmlOutcome {
         sanitize_html(html.as_bytes(), rules, &no_url_checker())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::tests_support::{no_url_checker, sanitize_default, sanitize_with};
+    use super::*;
+    use crate::policy::UrlRules;
+    use crate::policy::blockset::BlockSet;
+    use crate::policy::protectedset::SkeletonSet;
+    use crate::tests_helper::set_from::SetFrom;
+    use crate::urlcheck::cache::VerdictCache;
+
+    const FRAME_PLACEHOLDER: &str = "<div class=\"sanitized-placeholder\"></div>";
+
+    fn run(html: &str) -> HtmlOutcome {
+        sanitize_default(html)
+    }
+
+    fn run_with(html: &str, rules: &HtmlRules) -> HtmlOutcome {
+        sanitize_with(html, rules)
     }
 
     fn out(o: &HtmlOutcome) -> String {

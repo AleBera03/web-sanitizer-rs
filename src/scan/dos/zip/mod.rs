@@ -227,14 +227,14 @@ mod tests {
 
     #[test]
     fn normal_compression_ratio_is_not_flagged() {
-        // rapporto 1:1, nessun rischio
+        // 1:1 ratio, no risk
         let data = build_zip(&[(b"normal.bin", 1000, 1000)]);
         assert_eq!(zip_has_dos_risk(&data), None);
     }
 
     #[test]
     fn cumulative_uncompressed_size_over_budget_is_flagged() {
-        // rapporto sano (1:1) ma dimensione totale oltre MAX_TOTAL_UNCOMPRESSED_BYTES (1 GiB)
+        // healthy ratio (1:1) but total size past MAX_TOTAL_UNCOMPRESSED_BYTES (1 GiB)
         let huge = 1_200_000_000u32;
         let data = build_zip(&[(b"big.bin", huge, huge)]);
         assert!(zip_has_dos_risk(&data).is_some());
