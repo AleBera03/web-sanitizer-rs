@@ -94,7 +94,7 @@ impl VerdictCache {
         }
     }
 
-    /// Lookups served from the table, for `run.cache_hits` (spec AC-22).
+    /// Lookups served from the table, for `run.cache_hits`.
     pub fn hits(&self) -> u64 {
         self.hits.load(Ordering::Relaxed)
     }

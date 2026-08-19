@@ -1,18 +1,11 @@
-//! The SSRF guard (spec TC-11): where a name becomes an address, and the only
-//! place that decides whether the client may go there.
+//! The SSRF guard. It checks every address a request resolves to,
+//! and refuses the connection if any of them is forbidden.
 //!
-//! Three layers, from pure to impure: [`table`] classifies an address, [`resolver`]
-//! turns a name into addresses behind an injectable trait, [`cache`] remembers
-//! verdicts with deny/allow asymmetry. [`GuardedResolver`] composes them and is
-//! handed to `ureq` through `Agent::with_parts`, so the guard is not a check a
-//! call site performs — it is the resolver the agent was built with. A future
-//! call site that forgets to validate still cannot reach a forbidden address.
-//!
-//! Placing it here also closes the TOCTOU window that a naive check leaves open.
-//! Validating a URL and then handing it to a client that resolves the name again
-//! is *check-then-use*: the two resolutions are different observations, and the
-//! gap between them is the DNS-rebinding attack. Resolving once and connecting
-//! to that very address set is *check-and-use-the-same-value*.
+//! Three layers, from pure to impure:
+//! - [`table`] classifies an address
+//! - [`resolver`] turns a name into addresses behind an injectable trait
+//! - [`cache`] remembers verdicts with deny/allow asymmetry
+//! - [`GuardedResolver`] composes them and is handed to `ureq` through `Agent::with_parts`
 
 pub mod cache;
 pub mod resolver;
@@ -36,11 +29,10 @@ use cache::{ResolveCache, ResolveVerdict};
 use resolver::{NameResolver, SystemResolver};
 use table::{AllowList, CATEGORY_SSRF, IpDenyTable};
 
-/// Why a request exists. Passing this instead of a bare flag keeps the scope
-/// decision of T-11.7 in one `match` rather than scattered over call sites.
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FetchOrigin {
-    /// A URL the user typed: their own explicit intent.
+    /// A URL the user typed.
     InputCli,
     /// A URL that arrived in a request body from a possibly untrusted caller.
     InputServer,
@@ -52,7 +44,7 @@ pub enum FetchOrigin {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct FetchContext {
     pub origin: FetchOrigin,
-    /// Endpoint of the parent input, for the same-origin exemption (T-11.5).
+    /// Endpoint of the parent input, for the same-origin exemption.
     pub parent_endpoint: Option<SocketAddr>,
 }
 
@@ -81,7 +73,7 @@ impl FetchContext {
 
 /// A refusal, carried inside `io::Error` because that is the only channel
 /// `ureq`'s resolver trait offers. The fetcher downcasts it back into a typed
-/// error so the report can name the address and the rule (AC-30).
+/// error so the report can name the address and the rule.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SsrfDenied {
     pub addr: IpAddr,
@@ -107,8 +99,7 @@ impl fmt::Display for SsrfDenied {
 
 impl std::error::Error for SsrfDenied {}
 
-/// Everything the guard needs, compiled once at start-up and immutable
-/// afterwards — which is why it needs no lock (spec TC-5.4).
+/// Everything the guard needs. Compiled once at start-up and immutable.
 pub struct Guard {
     table: IpDenyTable,
     allow: AllowList,
@@ -124,8 +115,7 @@ impl Guard {
         Guard::with_resolver(rules, Arc::new(SystemResolver))
     }
 
-    /// Same, with the lookup step injected — the seam the rebinding and
-    /// split-horizon tests use.
+
     pub fn with_resolver(
         rules: &SsrfRules,
         names: Arc<dyn NameResolver>,
@@ -147,7 +137,6 @@ impl Guard {
         &self.cache
     }
 
-    /// Does the guard apply to a request made for this reason (T-11.7)?
     pub fn applies_to(&self, ctx: &FetchContext) -> bool {
         match ctx.origin {
             FetchOrigin::Subresource => true,
@@ -159,7 +148,6 @@ impl Guard {
         }
     }
 
-    /// Resolve once and vet the whole answer.
     fn decide(&self, host: &str, port: u16, scope: Scope) -> Result<Vec<SocketAddr>, GuardError> {
         // an allow-listed name never reaches the table (T-11.6)
         if self.allow.allows_host(host) {
@@ -168,8 +156,6 @@ impl Guard {
 
         let literal = parse_literal(host);
         let ttl = Duration::from_millis(self.rules.allow_ttl_ms);
-        // an IP literal has no name to resolve: one table walk is cheaper than
-        // a cache probe, and there is nothing a cache could go stale about
         if literal.is_none()
             && scope.guarded
             && let Some(verdict) = self.cache.get(host, port, ttl)
@@ -190,10 +176,7 @@ impl Guard {
             return Ok(addrs);
         }
 
-        // T-11.3: a mixed public/private answer is hostile as a whole. Filtering
-        // and keeping the good ones would hand the attacker an oracle — always
-        // include one valid public address and retry until the connection lands
-        // on the private one.
+
         let mut exempted = false;
         for candidate in &addrs {
             if self.exempt(*candidate, scope) {
@@ -219,9 +202,6 @@ impl Guard {
                 return Err(GuardError::Denied(denial));
             }
         }
-
-        // an allow that leaned on the parent's endpoint belongs to that parent
-        // alone: caching it would lend the exemption to every other input
         if literal.is_none() && !exempted {
             self.cache.insert(
                 host,
@@ -239,15 +219,13 @@ impl Guard {
         if self.allow.allows_addr(candidate.ip()) {
             return true;
         }
-        // T-11.5: address *and* port, so a neighbouring port on the same host
-        // is still a different endpoint and stays refused
         self.rules.same_origin_exemption && scope.parent == Some(candidate)
     }
 
     fn lookup(&self, host: &str, port: u16) -> Result<Vec<SocketAddr>, GuardError> {
         let addrs = self.names.lookup(host, port).map_err(GuardError::Lookup)?;
         if addrs.is_empty() {
-            // EC-10: an empty answer is a failure, never a free pass
+            // an empty answer is a failure
             return Err(GuardError::NoAddress);
         }
         Ok(addrs)
@@ -270,7 +248,6 @@ pub struct Scope {
 }
 
 impl Default for Scope {
-    /// Fail closed: a request that forgot to declare its scope is guarded.
     fn default() -> Scope {
         Scope {
             guarded: true,
@@ -449,7 +426,7 @@ mod tests {
 
     #[test]
     fn a_mixed_answer_is_refused_as_a_whole() {
-        // EC-10: keeping the good address would let the attacker choose the target
+        // keeping the good address would let the attacker choose the target
         let (guard, _) = guard_with(
             SsrfRules::default(),
             vec![vec![addr("93.184.216.34:80"), addr("10.0.0.5:80")]],
@@ -469,7 +446,7 @@ mod tests {
 
     #[test]
     fn ip_literals_are_classified_without_any_lookup() {
-        // EC-13: no name, no resolution, no cache probe
+        // no name, no resolution, no cache probe
         let (guard, names) = guard_with(SsrfRules::default(), vec![vec![addr("93.184.216.34:80")]]);
         for (host, rule) in [
             ("127.0.0.1", "ssrf.loopback"),
@@ -492,7 +469,7 @@ mod tests {
 
     #[test]
     fn a_vetted_answer_is_never_re_resolved_within_the_ttl() {
-        // AC-31/EC-11: the second answer is the rebinding attempt and is never asked for
+        // the second answer is the rebinding attempt and is never asked for
         let (guard, names) = guard_with(
             SsrfRules::default(),
             vec![vec![addr("93.184.216.34:80")], vec![addr("127.0.0.1:80")]],
@@ -506,7 +483,7 @@ mod tests {
 
     #[test]
     fn a_deny_is_sticky_for_the_run() {
-        // AC-35: re-resolving a refused name could only produce an allow
+        // re-resolving a refused name could only produce an allow
         let (guard, names) = guard_with(
             SsrfRules::default(),
             vec![vec![addr("127.0.0.1:80")], vec![addr("93.184.216.34:80")]],
@@ -546,7 +523,7 @@ mod tests {
 
     #[test]
     fn the_same_origin_exemption_is_endpoint_exact() {
-        // AC-33: same host and port is reachable, a neighbouring port is not
+        // same host and port is reachable, a neighbouring port is not
         let (guard, _) = guard_with(SsrfRules::default(), vec![vec![addr("127.0.0.1:3100")]]);
         let parent = Some(addr("127.0.0.1:3100"));
         let scope = Scope {
@@ -629,7 +606,7 @@ mod tests {
 
     #[test]
     fn an_unguarded_scope_resolves_and_allows() {
-        // EC-12: a CLI input URL under `guard_input_urls = never` is the user's
+        // a CLI input URL under `guard_input_urls = never` is the user's
         // own target, and it still resolves exactly once
         let (guard, names) = guard_with(SsrfRules::default(), vec![vec![addr("127.0.0.1:8080")]]);
         let scope = Scope {

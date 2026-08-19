@@ -19,7 +19,7 @@ pub enum InputError {
 }
 
 /// One unit of work for the engine. Scheme validation for URLs happens in the
-/// engine at acquire time (AC-3), not here — gathering never does I/O on the
+/// engine at acquire time. Gathering never does I/O on the
 /// input itself.
 #[derive(Debug, Clone, PartialEq)]
 pub enum InputSource {

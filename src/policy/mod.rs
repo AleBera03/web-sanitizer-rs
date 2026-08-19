@@ -16,7 +16,7 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-/// What to do when a rule fires (spec TC-9).
+/// What to do when a rule fires.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Action {
@@ -273,7 +273,7 @@ pub enum GuardScope {
     Always,
 }
 
-/// SSRF guard configuration (spec TC-11). The guard itself is always on;
+/// SSRF guard configuration. The guard itself is always on;
 /// what stays configurable is its scope over input URLs and the narrow
 /// exemptions below.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

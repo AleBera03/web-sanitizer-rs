@@ -1,6 +1,6 @@
 //! Address classification: the pure half of the guard.
 //!
-//! The table is hand-written because `IpAddr::is_global` is nightly-only (TC-1)
+//! The table is hand-written because `IpAddr::is_global` is nightly-only
 //! and because these rows have to be read line by line anyway. Each row carries
 //! the rule id the report must name.
 
@@ -438,8 +438,7 @@ mod tests {
 
     #[test]
     fn embedded_public_addresses_stay_reachable() {
-        // unwrapping must not deny the whole range: a NAT64 wrapper around a
-        // public address is a public address
+        // a NAT64 wrapper around a public address is a public address
         assert_eq!(classify("::ffff:93.184.216.34"), None);
         assert_eq!(classify("64:ff9b::5db8:d822"), None);
         assert_eq!(classify("2002:5db8:d822::"), None);

@@ -1,13 +1,13 @@
 //! The fetch seam: the only module in the crate that opens a socket.
 //!
-//! [`HttpFetcher`] is the `ureq`-based client mandated by spec TC-7: http/https only,
-//! a fixed outgoing header set (AC-18), redirects followed **by hand** one hop at a
+//! [`HttpFetcher`] is the `ureq`-based client http/https only,
+//! a fixed outgoing header set, redirects followed **by hand** one hop at a
 //! time, a response-size cap enforced while streaming, and a total-time deadline that
 //! spans the whole redirect chain.
 //!
 //! The SSRF guard of [`guard`] lives *below* the client, as the resolver the agent
 //! was built with, so input URLs, sub-resources and every redirect hop funnel
-//! through the same check without any of them having to remember to ask (AC-34).
+//! through the same check without any of them having to remember to ask.
 //!
 //! [`DisabledFetcher`] keeps URL inputs honest (`fetch_error`) where no client is wired.
 
@@ -913,7 +913,7 @@ mod tests {
         assert!(server.requests().is_empty());
     }
 
-    /// AC-18: the outgoing header set is fixed and carries nothing about the user.
+    /// the outgoing header set is fixed and carries nothing about the user.
     #[test]
     fn outgoing_headers_are_the_documented_fixed_set() {
         let server = TestServer::start(vec![ok_body("text/plain", b"ok")]);
@@ -1024,7 +1024,7 @@ mod tests {
 
     #[test]
     fn the_same_origin_exemption_makes_the_loopback_harness_usable() {
-        // AC-33: the parent's own endpoint is reachable for its sub-resources
+        // the parent's own endpoint is reachable for its sub-resources
         let server = TestServer::start(vec![ok_body("text/css", b"body{}")]);
         let policy = policy();
         let parent = server

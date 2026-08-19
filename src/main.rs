@@ -196,7 +196,7 @@ mod tests {
 
     #[test]
     fn an_output_path_that_cannot_be_a_directory_fails_before_processing() {
-        // EC-5: the run stops at configuration time, not halfway through a batch
+        // the run stops at configuration time, not halfway through a batch
         let dir = tempfile::tempdir().unwrap();
         let occupied = dir.path().join("file");
         fs::write(&occupied, b"").unwrap();

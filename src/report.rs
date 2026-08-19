@@ -34,7 +34,7 @@ pub struct RunSummary {
 
 /// Counters the engine hands to the aggregator. Separated from the summary so
 /// the derived `inputs_*` totals stay the aggregator's own single-writer
-/// business (spec AC-23).
+/// business.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct RunCounters {
     pub cache_hits: u64,
@@ -61,7 +61,7 @@ pub struct InputReport {
 }
 
 /// One sub-resource of one parent input. Nested under its parent and never a
-/// top-level input (spec AC-19).
+/// top-level input.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SubresourceReport {
     /// Absolute URL the reference resolved to.
@@ -404,7 +404,7 @@ mod tests {
         assert_eq!(report.run.subresources_fetched, 2);
         assert_eq!(report.run.subresources_refused, 2); // ssrf + budget
         assert_eq!(report.run.ssrf_blocked, 1);
-        // AC-20: a refused sub-resource never fails its parent's exit code
+        // a refused sub-resource never fails its parent's exit code
         assert_eq!(report.run.inputs_refused, 0);
         assert_eq!(report.exit_code(), 0);
     }

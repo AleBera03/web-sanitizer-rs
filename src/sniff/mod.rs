@@ -147,10 +147,6 @@ pub fn sniff_input(input: AcquiredInput, rules: &SubresourcesRules, verbose: u8)
     let declared_mime = read_declared_mime(&input);
     let actual_mime = read_actual_mime(&input);
 
-    // TEMP: a mismatch counts only where both sides name a type. Under
-    // `declared != actual` one unknown side is enough to refuse, and an .html
-    // page without a doctype comes out `refused` (three red CLI tests). To be
-    // revisited once the heuristic for textual types is complete.
     let mismatch = matches!((declared_mime, actual_mime), (Some(d), Some(a)) if d != a);
     if mismatch {
         let action = match rules.sniff_rule {
