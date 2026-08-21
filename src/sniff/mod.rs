@@ -208,7 +208,10 @@ fn read_declared_mime(input: &AcquiredInput) -> Option<MimeType> {
 }
 
 //TODO riordinare i tipi per macrotipi così rimane più leggibile
-fn read_actual_mime(input: &AcquiredInput, zip_budget: &crate::policy::ZipBudgets,) -> Option<MimeType> {
+fn read_actual_mime(
+    input: &AcquiredInput,
+    zip_budget: &crate::policy::ZipBudgets,
+) -> Option<MimeType> {
     if input.data.starts_with(JPEG) {
         Some(ImageJpeg)
     } else if input.data.starts_with(PNG) {
@@ -324,7 +327,7 @@ pub fn sniff_bytes(data: &[u8]) -> Option<MimeType> {
         },
         data.to_vec(),
     );
-    read_actual_mime(&input, budget())
+    read_actual_mime(&input, &crate::policy::ZipBudgets::default())
 }
 
 #[cfg(test)]
@@ -455,10 +458,6 @@ mod tests {
                 &bytes_input("x", b"<svg xmlns=\"http://www.w3.org/2000/svg\"></svg>"),
                 &budget()
             ),
-            read_actual_mime(&bytes_input(
-                "x",
-                b"<svg xmlns=\"http://www.w3.org/2000/svg\"></svg>"
-            ), budget()),
             Some(MimeType::ImageSvg)
         );
     }
