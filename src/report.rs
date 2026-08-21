@@ -25,6 +25,21 @@ pub struct RunSummary {
     pub inputs_refused: u64,
     pub inputs_errored: u64,
     pub cache_hits: u64,
+    pub resolve_cache_hits: u64,
+    pub fetch_subresources: bool,
+    pub subresources_fetched: u64,
+    pub subresources_refused: u64,
+    pub ssrf_blocked: u64,
+}
+
+/// Counters the engine hands to the aggregator. Separated from the summary so
+/// the derived `inputs_*` totals stay the aggregator's own single-writer
+/// business.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct RunCounters {
+    pub cache_hits: u64,
+    pub resolve_cache_hits: u64,
+    pub fetch_subresources: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -39,6 +54,44 @@ pub struct InputReport {
     /// Human-readable cause for error statuses.
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub error: Option<String>,
+    /// Present only when sub-resource fetching ran for this input: omitted,
+    /// never `null`, when the feature is off.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub subresources: Option<Vec<SubresourceReport>>,
+}
+
+/// One sub-resource of one parent input. Nested under its parent and never a
+/// top-level input.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SubresourceReport {
+    /// Absolute URL the reference resolved to.
+    pub url: String,
+    /// URL after redirects, absent when no response was ever received.
+    pub final_url: Option<String>,
+    pub depth: u32,
+    pub status: InputStatus,
+    pub bytes_in: u64,
+    pub bytes_out: u64,
+    pub duration_ms: u64,
+    pub declared_mime: Option<String>,
+    pub sniffed_mime: Option<String>,
+    /// Set when the SSRF guard refused the request before connecting.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub block: Option<GuardBlock>,
+    pub actions: Vec<SanitisationAction>,
+    /// Human-readable cause for error statuses.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub error: Option<String>,
+}
+
+/// Why the guard refused, in the terms the audit needs: which rule, which
+/// address it fired on, and at which redirect hop.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct GuardBlock {
+    pub rule_id: String,
+    pub category: String,
+    pub resolved_address: String,
+    pub hop: u32,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -53,6 +106,8 @@ pub enum InputStatus {
     UnsupportedScheme,
     MalformedUrl,
     InternalError,
+    /// Refused by the SSRF guard before any connection was opened.
+    SsrfBlocked,
     /// Symlinks escaping the tree root.
     SkippedSymlink,
 }
@@ -64,7 +119,10 @@ impl InputStatus {
     fn bucket(self) -> Bucket {
         match self {
             InputStatus::Sanitised | InputStatus::Clean => Bucket::Ok,
-            InputStatus::Refused | InputStatus::BudgetExceeded => Bucket::Refused,
+            // an SSRF block is a policy refusal, not an environment failure
+            InputStatus::Refused | InputStatus::BudgetExceeded | InputStatus::SsrfBlocked => {
+                Bucket::Refused
+            }
             InputStatus::FetchError
             | InputStatus::IoError
             | InputStatus::UnsupportedScheme
@@ -104,7 +162,7 @@ impl RunReport {
         started: String,
         policy: String,
         workers: usize,
-        cache_hits: u64,
+        counters: RunCounters,
         inputs: Vec<InputReport>,
     ) -> RunReport {
         let mut report = RunReport {
@@ -116,7 +174,12 @@ impl RunReport {
                 inputs_ok: 0,
                 inputs_refused: 0,
                 inputs_errored: 0,
-                cache_hits,
+                cache_hits: counters.cache_hits,
+                resolve_cache_hits: counters.resolve_cache_hits,
+                fetch_subresources: counters.fetch_subresources,
+                subresources_fetched: 0,
+                subresources_refused: 0,
+                ssrf_blocked: 0,
             },
             inputs: Vec::with_capacity(inputs.len()),
         };
@@ -129,12 +192,33 @@ impl RunReport {
     /// Append one per-input report, keeping the summary counters consistent.
     /// Used by the engine for processed inputs and by front-ends for inputs
     /// rejected before processing (e.g. skipped symlinks).
+    ///
+    /// Sub-resource totals are folded in here rather than counted by the
+    /// workers: the aggregator is the single writer of everything derived, so
+    /// the same input list yields the same summary at any `--jobs` value.
     pub fn push(&mut self, input: InputReport) {
         self.run.inputs_total += 1;
         match input.status.bucket() {
             Bucket::Ok => self.run.inputs_ok += 1,
             Bucket::Refused => self.run.inputs_refused += 1,
             Bucket::Errored => self.run.inputs_errored += 1,
+        }
+        if input.status == InputStatus::SsrfBlocked {
+            self.run.ssrf_blocked += 1;
+        }
+        for sub in input.subresources.iter().flatten() {
+            match sub.status {
+                InputStatus::SsrfBlocked => {
+                    self.run.ssrf_blocked += 1;
+                    self.run.subresources_refused += 1;
+                }
+                InputStatus::Refused | InputStatus::BudgetExceeded => {
+                    self.run.subresources_refused += 1;
+                }
+                // a body came back and was processed
+                InputStatus::Sanitised | InputStatus::Clean => self.run.subresources_fetched += 1,
+                _ => {}
+            }
         }
         self.inputs.push(input);
     }
@@ -174,6 +258,24 @@ mod tests {
             duration_ms: 1,
             actions: Vec::new(),
             error: None,
+            subresources: None,
+        }
+    }
+
+    fn sample_sub(url: &str, status: InputStatus) -> SubresourceReport {
+        SubresourceReport {
+            url: url.into(),
+            final_url: None,
+            depth: 1,
+            status,
+            bytes_in: 0,
+            bytes_out: 0,
+            duration_ms: 0,
+            declared_mime: None,
+            sniffed_mime: None,
+            block: None,
+            actions: Vec::new(),
+            error: None,
         }
     }
 
@@ -188,6 +290,7 @@ mod tests {
             (InputStatus::IoError, "io_error"),
             (InputStatus::UnsupportedScheme, "unsupported_scheme"),
             (InputStatus::InternalError, "internal_error"),
+            (InputStatus::SsrfBlocked, "ssrf_blocked"),
             (InputStatus::SkippedSymlink, "skipped_symlink"),
         ];
         for (status, expected) in cases {
@@ -204,7 +307,10 @@ mod tests {
             "2026-07-18T22:25:00Z".into(),
             "builtin".into(),
             8,
-            42,
+            RunCounters {
+                cache_hits: 42,
+                ..RunCounters::default()
+            },
             vec![sample_input(InputStatus::Clean)],
         );
         report.inputs[0].actions.push(SanitisationAction {
@@ -231,16 +337,120 @@ mod tests {
         assert!(action["replacement"].is_null());
         // `error` is additive and must be absent on success
         assert!(v["inputs"][0].get("error").is_none());
+        assert_eq!(v["run"]["fetch_subresources"], false);
+        // `subresources` is omitted, not null, when fetching is off
+        assert!(v["inputs"][0].get("subresources").is_none());
     }
 
     #[test]
-    fn round_trips_through_json() {
+    fn subresource_entries_nest_under_their_parent() {
+        let mut parent = sample_input(InputStatus::Sanitised);
+        let mut blocked = sample_sub(
+            "http://169.254.169.254/latest/meta-data/",
+            InputStatus::SsrfBlocked,
+        );
+        blocked.block = Some(GuardBlock {
+            rule_id: "ssrf.link_local".into(),
+            category: "ssrf".into(),
+            resolved_address: "169.254.169.254:80".into(),
+            hop: 0,
+        });
+        parent.subresources = Some(vec![
+            blocked,
+            sample_sub("http://cdn.example/a.css", InputStatus::Clean),
+        ]);
+
+        let report = RunReport::assemble(
+            "2026-07-18T22:25:00Z".into(),
+            "builtin".into(),
+            1,
+            RunCounters {
+                fetch_subresources: true,
+                ..RunCounters::default()
+            },
+            vec![parent],
+        );
+        let v = serde_json::to_value(&report).unwrap();
+        let sub = &v["inputs"][0]["subresources"][0];
+        assert_eq!(sub["status"], "ssrf_blocked");
+        assert_eq!(sub["depth"], 1);
+        assert_eq!(sub["block"]["rule_id"], "ssrf.link_local");
+        assert_eq!(sub["block"]["resolved_address"], "169.254.169.254:80");
+        assert!(sub["final_url"].is_null());
+        // a refused sub-resource never becomes a top-level input
+        assert_eq!(v["inputs"].as_array().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn subresource_totals_are_folded_into_the_summary() {
+        let mut parent = sample_input(InputStatus::Sanitised);
+        parent.subresources = Some(vec![
+            sample_sub("http://a/1.css", InputStatus::Clean),
+            sample_sub("http://a/2.js", InputStatus::Sanitised),
+            sample_sub("http://10.0.0.5/x", InputStatus::SsrfBlocked),
+            sample_sub("http://a/3.png", InputStatus::BudgetExceeded),
+            sample_sub("http://a/4.gif", InputStatus::FetchError),
+        ]);
         let report = RunReport::assemble(
             Zoned::now().to_string(),
             "builtin".into(),
             1,
-            0,
-            vec![sample_input(InputStatus::BudgetExceeded)],
+            RunCounters {
+                fetch_subresources: true,
+                ..RunCounters::default()
+            },
+            vec![parent],
+        );
+        assert_eq!(report.run.subresources_fetched, 2);
+        assert_eq!(report.run.subresources_refused, 2); // ssrf + budget
+        assert_eq!(report.run.ssrf_blocked, 1);
+        // a refused sub-resource never fails its parent's exit code
+        assert_eq!(report.run.inputs_refused, 0);
+        assert_eq!(report.exit_code(), 0);
+    }
+
+    #[test]
+    fn a_blocked_input_url_is_a_refusal() {
+        let report = RunReport::assemble(
+            Zoned::now().to_string(),
+            "builtin".into(),
+            1,
+            RunCounters::default(),
+            vec![sample_input(InputStatus::SsrfBlocked)],
+        );
+        assert_eq!(report.run.inputs_refused, 1);
+        assert_eq!(report.run.ssrf_blocked, 1);
+        assert_eq!(report.exit_code(), 1);
+    }
+
+    #[test]
+    fn resolve_cache_hits_reach_the_summary() {
+        let report = RunReport::assemble(
+            Zoned::now().to_string(),
+            "builtin".into(),
+            1,
+            RunCounters {
+                fetch_subresources: true,
+                resolve_cache_hits: 7,
+                ..RunCounters::default()
+            },
+            Vec::new(),
+        );
+        let v = serde_json::to_value(&report).unwrap();
+        assert_eq!(v["run"]["resolve_cache_hits"], 7);
+        assert_eq!(v["run"]["fetch_subresources"], true);
+    }
+
+    #[test]
+    fn round_trips_through_json() {
+        let mut input = sample_input(InputStatus::BudgetExceeded);
+        input.subresources = Some(vec![sample_sub("http://a/1.css", InputStatus::Clean)]);
+        let report = RunReport::assemble(
+            Zoned::now().to_string(),
+            "builtin".into(),
+            1,
+            RunCounters::default(),
+            vec![input],
         );
         let json = serde_json::to_string(&report).unwrap();
         let back: RunReport = serde_json::from_str(&json).unwrap();
@@ -253,7 +463,7 @@ mod tests {
             Zoned::now().to_string(),
             "builtin".into(),
             4,
-            0,
+            RunCounters::default(),
             vec![
                 sample_input(InputStatus::Clean),
                 sample_input(InputStatus::Sanitised),
@@ -272,7 +482,7 @@ mod tests {
             Zoned::now().to_string(),
             "builtin".into(),
             1,
-            0,
+            RunCounters::default(),
             vec![
                 sample_input(InputStatus::Clean),
                 sample_input(InputStatus::IoError),

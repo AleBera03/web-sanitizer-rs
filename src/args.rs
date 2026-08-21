@@ -35,6 +35,33 @@ pub struct Args {
     /// Human-readable progress on stderr; repeat (-vv) to include fragments.
     #[arg(short, long, action = clap::ArgAction::Count)]
     pub verbose: u8,
+
+    /// Fetch the sub-resources an HTML input references (off by default).
+    #[arg(long)]
+    pub fetch_subresources: bool,
+
+    /// Requests per input while fetching sub-resources.
+    #[arg(long, value_name = "N")]
+    pub subresource_max_requests: Option<u32>,
+
+    /// Bytes summed over all sub-resources of one input.
+    #[arg(long, value_name = "BYTES")]
+    pub subresource_max_bytes: Option<u64>,
+}
+
+impl Args {
+    /// Apply the flags that override policy values.
+    pub fn override_policy(&self, policy: &mut web_sanitizer::Policy) {
+        if self.fetch_subresources {
+            policy.subresources.fetch_subresources = true;
+        }
+        if let Some(max) = self.subresource_max_requests {
+            policy.subresources.max_requests = max;
+        }
+        if let Some(max) = self.subresource_max_bytes {
+            policy.subresources.max_total_bytes = max;
+        }
+    }
 }
 
 fn default_jobs() -> usize {
@@ -70,5 +97,32 @@ mod tests {
         assert_eq!(args.jobs, 4);
         assert_eq!(args.out, PathBuf::from("result"));
         assert_eq!(args.verbose, 2);
+    }
+
+    #[test]
+    fn the_safe_state_needs_no_flag() {
+        let args = Args::parse_from(["web-sanitizer", "a.html"]);
+        assert!(!args.fetch_subresources);
+        let mut policy = web_sanitizer::Policy::builtin();
+        args.override_policy(&mut policy);
+        assert!(!policy.subresources.fetch_subresources);
+    }
+
+    #[test]
+    fn flags_override_the_policy_file() {
+        let args = Args::parse_from([
+            "web-sanitizer",
+            "a.html",
+            "--fetch-subresources",
+            "--subresource-max-requests",
+            "4",
+            "--subresource-max-bytes",
+            "1024",
+        ]);
+        let mut policy = web_sanitizer::Policy::builtin();
+        args.override_policy(&mut policy);
+        assert!(policy.subresources.fetch_subresources);
+        assert_eq!(policy.subresources.max_requests, 4);
+        assert_eq!(policy.subresources.max_total_bytes, 1024);
     }
 }

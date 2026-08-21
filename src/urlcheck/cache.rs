@@ -94,6 +94,11 @@ impl VerdictCache {
         }
     }
 
+    /// Lookups served from the table, for `run.cache_hits`.
+    pub fn hits(&self) -> u64 {
+        self.hits.load(Ordering::Relaxed)
+    }
+
     pub fn hit_rate(&self) -> f64 {
         let h = self.hits.load(Ordering::Relaxed) as f64;
         let m = self.misses.load(Ordering::Relaxed) as f64;

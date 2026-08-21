@@ -109,7 +109,8 @@ fn bad_policy_file_exits_2() {
 fn unsupported_scheme_is_reported_not_fetched() {
     let dir = tempfile::tempdir().unwrap();
     let output = run(&["ftp://example.com/x", "--out", "result"], dir.path());
-    // Errored ≠ refused: exit 0 per AC-20's literal enumeration.
+    // errored != refused, so the exit code is 0
+    // the batch completed, but one input failed
     assert_eq!(output.status.code(), Some(0));
 
     let report = report_json(&dir.path().join("result"));

@@ -19,7 +19,7 @@ pub enum InputError {
 }
 
 /// One unit of work for the engine. Scheme validation for URLs happens in the
-/// engine at acquire time (AC-3), not here — gathering never does I/O on the
+/// engine at acquire time. Gathering never does I/O on the
 /// input itself.
 #[derive(Debug, Clone, PartialEq)]
 pub enum InputSource {
@@ -43,6 +43,63 @@ impl InputSource {
             InputSource::MalformedUrl(s) => s.to_string(),
             InputSource::Bytes { name, .. } => name.clone(),
         }
+    }
+}
+
+/// Names the outputs of one input carry under the output directory. The
+/// sanitised copy and its sub-resources share a stem, so which assets belong to
+/// which file is readable from the layout alone: `3-page.html` sits next to
+/// `3-page.html.assets/`.
+///
+/// The stem joins the input's position in the batch to the last component of its
+/// source. The index keeps same-named files from different directories apart and
+/// stays stable when completions stop arriving in order, while the name is
+/// reduced to ASCII alphanumerics plus `.`, `_` and `-` so no character the
+/// input chose reaches a path we write.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OutputName {
+    stem: String,
+}
+
+impl OutputName {
+    /// Stands in for a source with no usable last component, such as a bare `/`
+    /// or an unnamed in-memory input.
+    const UNNAMED: &'static str = "input";
+
+    pub fn derive(index: usize, source: &str) -> OutputName {
+        let base = Path::new(source)
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        let safe: String = base
+            .chars()
+            .map(|c| {
+                if c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-') {
+                    c
+                } else {
+                    '_'
+                }
+            })
+            .collect();
+        let safe = if safe.is_empty() {
+            OutputName::UNNAMED.to_string()
+        } else {
+            safe
+        };
+        OutputName {
+            stem: format!("{index}-{safe}"),
+        }
+    }
+
+    /// File name of the sanitised copy.
+    pub fn file(&self) -> &str {
+        &self.stem
+    }
+
+    /// Directory holding the sub-resources of this input, relative to the
+    /// output directory.
+    pub fn asset_dir(&self) -> String {
+        format!("{}.assets", self.stem)
     }
 }
 
@@ -293,6 +350,41 @@ mod tests {
 
         let result = gather(&[dir.path().display().to_string()], None, &exts()).unwrap();
         assert_eq!(result.inputs.len(), 1);
+    }
+
+    #[test]
+    fn output_names_are_indexed_and_sanitised() {
+        assert_eq!(
+            OutputName::derive(3, "/tmp/dir/page.html").file(),
+            "3-page.html"
+        );
+        assert_eq!(
+            OutputName::derive(0, "http://example.com/a/b.html").file(),
+            "0-b.html"
+        );
+        assert_eq!(
+            OutputName::derive(1, "we ird$.html").file(),
+            "1-we_ird_.html"
+        );
+        // a bare-host URL falls back to the host as the name
+        assert_eq!(
+            OutputName::derive(2, "http://example.com/").file(),
+            "2-example.com"
+        );
+    }
+
+    #[test]
+    fn a_source_without_a_last_component_still_gets_a_name() {
+        assert_eq!(OutputName::derive(0, "/").file(), "0-input");
+        assert_eq!(OutputName::derive(4, "").file(), "4-input");
+        assert_eq!(OutputName::derive(1, "..").file(), "1-input");
+    }
+
+    #[test]
+    fn the_asset_directory_shares_the_stem_of_its_parent() {
+        let name = OutputName::derive(3, "/tmp/dir/page.html");
+        assert_eq!(name.asset_dir(), "3-page.html.assets");
+        assert!(name.asset_dir().starts_with(name.file()));
     }
 
     #[test]

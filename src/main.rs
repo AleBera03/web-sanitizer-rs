@@ -12,8 +12,8 @@ use clap::Parser;
 use std::error::Error;
 
 use web_sanitizer::Engine;
-use web_sanitizer::fetch::DisabledFetcher;
-use web_sanitizer::input;
+use web_sanitizer::fetch::HttpFetcher;
+use web_sanitizer::input::{self, OutputName};
 use web_sanitizer::policy::Policy;
 use web_sanitizer::report::{InputReport, InputStatus};
 
@@ -33,10 +33,12 @@ fn main() -> ExitCode {
 }
 
 fn run(args: args::Args) -> Result<u8, Box<dyn Error>> {
-    let policy = match &args.policy {
+    let mut policy = match &args.policy {
         Some(path) => Policy::load(path).map_err(|e| e.to_string())?,
         None => Policy::builtin(),
     };
+    args.override_policy(&mut policy);
+    warn_about_posture(&policy);
 
     let gathered = input::gather(
         &args.inputs,
@@ -51,33 +53,41 @@ fn run(args: args::Args) -> Result<u8, Box<dyn Error>> {
     // unwritable output directory is detected before processing starts
     prepare_out_dir(&args.out)?;
 
-    let engine = Engine::new(policy, Arc::new(DisabledFetcher)).map_err(|e| e.to_string())?;
+    // the fetch client is built from the policy that is about to be moved into
+    // the engine, guard included: there is no unguarded client to build
+    let fetcher =
+        Arc::new(HttpFetcher::new(&policy.fetch, &policy.ssrf).map_err(|e| e.to_string())?);
+    let engine = Engine::new(policy, fetcher).map_err(|e| e.to_string())?;
 
-    let mut output_index = 0usize;
     let mut write_failures = 0usize;
     let verbose = args.verbose;
     let out_dir = args.out.clone();
-    let mut report = engine.process_batch(gathered.inputs, args.jobs, |input_report, sanitised| {
+    let mut report = engine.process_batch(gathered.inputs, args.jobs, |index, outcome| {
         if verbose > 0 {
-            log_input(input_report, verbose);
+            log_input(&outcome.report, verbose);
         }
-        if let Some(bytes) = sanitised {
-            match output_name(output_index, &input_report.source) {
-                Ok(o) => {
-                    let pathfile = Path::new(&o);
-                    let path = out_dir.join(pathfile);
-                    if let Err(e) = fs::write(&path, bytes) {
-                        eprintln!("error: cannot write {}: {e}", path.display());
-                        write_failures += 1;
-                    }
-                }
-                Err(e) => {
-                    eprintln!("{}", e);
-                    write_failures += 1;
-                }
+        if let Some(bytes) = outcome.sanitized.as_deref() {
+            let path = out_dir.join(OutputName::derive(index, &outcome.report.source).file());
+            if let Err(e) = fs::write(&path, bytes) {
+                eprintln!("error: cannot write {}: {e}", path.display());
+                write_failures += 1;
             }
         }
-        output_index += 1;
+        // sub-resource bodies live in their parent's own directory, which the
+        // engine named from the same stem, under names it derived from the
+        // sniffed type
+        for asset in &outcome.assets {
+            let path = out_dir.join(&asset.path);
+            let written = path
+                .parent()
+                .map(fs::create_dir_all)
+                .unwrap_or(Ok(()))
+                .and_then(|()| fs::write(&path, &asset.bytes));
+            if let Err(e) = written {
+                eprintln!("error: cannot write {}: {e}", path.display());
+                write_failures += 1;
+            }
+        }
     });
 
     // symlinks the walker refused, appended as skipped_symlink reports
@@ -95,6 +105,7 @@ fn run(args: args::Args) -> Result<u8, Box<dyn Error>> {
             duration_ms: 0,
             actions: Vec::new(),
             error: Some("symlink resolves outside the tree root".to_string()),
+            subresources: None,
         });
     }
 
@@ -113,6 +124,18 @@ fn run(args: args::Args) -> Result<u8, Box<dyn Error>> {
     Ok(report.exit_code() as u8)
 }
 
+/// State the protection posture on stderr before anything runs. The guard is
+/// always on, so what is left to warn about are the narrow exemptions a policy
+/// file can open.
+fn warn_about_posture(policy: &Policy) {
+    if !policy.ssrf.allow_hosts.is_empty() {
+        eprintln!(
+            "warning: {} host(s) bypass the SSRF deny table via ssrf.allow_hosts",
+            policy.ssrf.allow_hosts.len()
+        );
+    }
+}
+
 fn prepare_out_dir(out: &Path) -> Result<(), String> {
     fs::create_dir_all(out).map_err(|e| format!("cannot create {}: {e}", out.display()))?;
     // check with probe file writability of out_dir
@@ -121,26 +144,6 @@ fn prepare_out_dir(out: &Path) -> Result<(), String> {
         .map_err(|e| format!("output directory {} is not writable: {e}", out.display()))?;
     let _ = fs::remove_file(&probe);
     Ok(())
-}
-
-/// Output file name: _input index_ + _name derived from the sanitised input name_.
-/// The index prefix aims to do not confuse same named-files between different dirs.
-fn output_name(index: usize, source: &str) -> Result<String, String> {
-    let base = Path::new(source)
-        .file_name()
-        .map(|n| n.to_string_lossy().into_owned())
-        .ok_or_else(|| "impossible retrieve a filename/extension".to_string())?;
-    let safe: String = base
-        .chars()
-        .map(|c| {
-            if c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-') {
-                c
-            } else {
-                '_'
-            }
-        })
-        .collect();
-    Ok(format!("{index}-{safe}"))
 }
 
 fn log_input(report: &InputReport, verbose: u8) {
@@ -182,17 +185,21 @@ mod tests {
     use super::*;
 
     #[test]
-    fn output_names_are_indexed_and_sanitised() {
-        assert_eq!(output_name(3, "/tmp/dir/page.html").unwrap(), "3-page.html");
-        assert_eq!(
-            output_name(0, "http://example.com/a/b.html").unwrap(),
-            "0-b.html"
-        );
-        assert_eq!(output_name(1, "we ird$.html").unwrap(), "1-we_ird_.html");
-        // A bare-host URL falls back to the host as the name.
-        assert_eq!(
-            output_name(2, "http://example.com/").unwrap(),
-            "2-example.com"
-        );
+    fn a_missing_output_directory_is_created_and_left_clean() {
+        let parent = tempfile::tempdir().unwrap();
+        let out = parent.path().join("nested/out");
+        prepare_out_dir(&out).unwrap();
+        assert!(out.is_dir());
+        // the probe must not survive the check that used it
+        assert_eq!(fs::read_dir(&out).unwrap().count(), 0);
+    }
+
+    #[test]
+    fn an_output_path_that_cannot_be_a_directory_fails_before_processing() {
+        // the run stops at configuration time, not halfway through a batch
+        let dir = tempfile::tempdir().unwrap();
+        let occupied = dir.path().join("file");
+        fs::write(&occupied, b"").unwrap();
+        assert!(prepare_out_dir(&occupied).is_err());
     }
 }

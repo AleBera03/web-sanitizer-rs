@@ -1,5 +1,5 @@
-use crate::policy::ZipBudgets;
 use crate::scan::utilities::{read_u16, read_u32};
+use crate::policy::ZipBudgets;
 
 // CONSTANTS
 const EOCD_SIGNATURE: &[u8] = &[0x50, 0x4B, 0x05, 0x06];
