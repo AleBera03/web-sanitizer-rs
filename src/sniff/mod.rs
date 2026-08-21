@@ -83,7 +83,7 @@ pub struct SniffOutcome {
 pub fn sniff_input(input: AcquiredInput, rules: &SubresourcesRules, verbose: u8) -> SniffOutcome {
     let _ = verbose;
     let declared_mime = read_declared_mime(&input);
-    let actual_mime = read_actual_mime(&input);
+    let actual_mime = read_actual_mime(&input, &rules.zip_budget);
 
     if declared_mime != actual_mime {
         let action = match rules.sniff_rule {
@@ -145,7 +145,7 @@ fn read_declared_mime(input: &AcquiredInput) -> Option<MimeType> {
 }
 
 //TODO riordinare i tipi per macrotipi così rimane più leggibile
-fn read_actual_mime(input: &AcquiredInput) -> Option<MimeType> {
+fn read_actual_mime(input: &AcquiredInput, zip_budget: &crate::policy::ZipBudgets,) -> Option<MimeType> {
     if input.data.starts_with(JPEG) {
         Some(ImageJpeg)
     } else if input.data.starts_with(PNG) {
@@ -159,7 +159,7 @@ fn read_actual_mime(input: &AcquiredInput) -> Option<MimeType> {
     } else if input.data.starts_with(TIFF_LE) || input.data.starts_with(TIFF_BE) {
         Some(ImageTiff)
     } else if input.data.starts_with(ZIP_OOXML) {
-        match zip_ooxml_kind(&input.data) {
+        match zip_ooxml_kind(&input.data, zip_budget) {
             Some(OoxmlKind::Word) => Some(MimeType::WordDocx),
             Some(OoxmlKind::Excel) => Some(MimeType::ExcelXlsx),
             Some(OoxmlKind::PowerPoint) => Some(MimeType::PowerPointPptx),
@@ -223,8 +223,13 @@ fn mime_from_extension(ext: &str) -> Option<MimeType> {
 #[cfg(test)]
 mod tests {
     use std::path::PathBuf;
+    use crate::policy::ZipBudgets;
 
     use super::*;
+
+    fn budget() -> ZipBudgets {
+        ZipBudgets::default()
+    }
 
     fn bytes_input(name: &str, data: &[u8]) -> AcquiredInput {
         AcquiredInput {
@@ -253,23 +258,23 @@ mod tests {
     #[test]
     fn detects_jpeg_from_magic_bytes() {
         let input = bytes_input("x", &[0xFF, 0xD8, 0xFF, 0x00]);
-        assert_eq!(read_actual_mime(&input), Some(MimeType::ImageJpeg));
+        assert_eq!(read_actual_mime(&input, &budget()), Some(MimeType::ImageJpeg));
     }
 
     #[test]
     fn detects_png_from_magic_bytes() {
         let input = bytes_input("x", &[0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]);
-        assert_eq!(read_actual_mime(&input), Some(MimeType::ImagePng));
+        assert_eq!(read_actual_mime(&input, &budget()), Some(MimeType::ImagePng));
     }
 
     #[test]
     fn detects_gif87a_and_gif89a() {
         assert_eq!(
-            read_actual_mime(&bytes_input("x", b"GIF87a...")),
+            read_actual_mime(&bytes_input("x", b"GIF87a..."), &budget()),
             Some(MimeType::ImageGif)
         );
         assert_eq!(
-            read_actual_mime(&bytes_input("x", b"GIF89a...")),
+            read_actual_mime(&bytes_input("x", b"GIF89a..."), &budget()),
             Some(MimeType::ImageGif)
         );
     }
@@ -277,23 +282,23 @@ mod tests {
     #[test]
     fn detects_html_doctype() {
         let input = bytes_input("x", b"<!DOCTYPE html><html></html>");
-        assert_eq!(read_actual_mime(&input), Some(MimeType::TextHtml));
+        assert_eq!(read_actual_mime(&input, &budget()), Some(MimeType::TextHtml));
     }
 
     #[test]
     fn detects_pdf() {
         let input = bytes_input("x", b"%PDF-1.7 ...");
-        assert_eq!(read_actual_mime(&input), Some(MimeType::ApplicationPdf));
+        assert_eq!(read_actual_mime(&input, &budget()), Some(MimeType::ApplicationPdf));
     }
 
     #[test]
     fn detects_tiff_little_and_big_endian() {
         assert_eq!(
-            read_actual_mime(&bytes_input("x", b"II*\0...")),
+            read_actual_mime(&bytes_input("x", b"II*\0..."), &budget()),
             Some(MimeType::ImageTiff)
         );
         assert_eq!(
-            read_actual_mime(&bytes_input("x", b"MM\0*...")),
+            read_actual_mime(&bytes_input("x", b"MM\0*..."), &budget()),
             Some(MimeType::ImageTiff)
         );
     }
@@ -301,33 +306,33 @@ mod tests {
     #[test]
     fn detects_zip_ooxml() {
         let input = bytes_input("x", &[0x50, 0x4B, 0x03, 0x04, 0x00]);
-        assert_eq!(read_actual_mime(&input), Some(MimeType::ApplicationZip));
+        assert_eq!(read_actual_mime(&input, &budget()), Some(MimeType::ApplicationZip));
     }
 
     #[test]
     fn detects_flac_mp3_wav_avi_and_mp4() {
         assert_eq!(
-            read_actual_mime(&bytes_input("x", b"fLaC\x00\x00\x00")),
+            read_actual_mime(&bytes_input("x", b"fLaC\x00\x00\x00"), &budget()),
             Some(MimeType::AudioFlac)
         );
         assert_eq!(
-            read_actual_mime(&bytes_input("x", b"ID3\x03\x00\x00")),
+            read_actual_mime(&bytes_input("x", b"ID3\x03\x00\x00"), &budget()),
             Some(MimeType::AudioMp3)
         );
         assert_eq!(
-            read_actual_mime(&bytes_input("x", b"\xFF\xFB\x90\x00\x00")),
+            read_actual_mime(&bytes_input("x", b"\xFF\xFB\x90\x00\x00"), &budget()),
             Some(MimeType::AudioMp3)
         );
         assert_eq!(
-            read_actual_mime(&bytes_input("x", b"RIFF\x24\x00\x00\x00WAVE")),
+            read_actual_mime(&bytes_input("x", b"RIFF\x24\x00\x00\x00WAVE"), &budget()),
             Some(MimeType::AudioWav)
         );
         assert_eq!(
-            read_actual_mime(&bytes_input("x", b"AVI ")),
+            read_actual_mime(&bytes_input("x", b"AVI "), &budget()),
             Some(MimeType::VideoAvi)
         );
         assert_eq!(
-            read_actual_mime(&bytes_input("x", b"\x00\x00\x00\x00ftypmp41")),
+            read_actual_mime(&bytes_input("x", b"\x00\x00\x00\x00ftypmp41"), &budget()),
             Some(MimeType::VideoMp4)
         );
     }
@@ -335,11 +340,14 @@ mod tests {
     #[test]
     fn detects_xml_and_svg() {
         assert_eq!(
-            read_actual_mime(&bytes_input("x", b"<?xml version=\"1.0\"?><root/>")),
+            read_actual_mime(&bytes_input("x", b"<?xml version=\"1.0\"?><root/>"), &budget()),
             Some(MimeType::ApplicationXml)
         );
         assert_eq!(
-            read_actual_mime(&bytes_input("x", b"<svg xmlns=\"http://www.w3.org/2000/svg\"></svg>")),
+            read_actual_mime(
+                &bytes_input("x", b"<svg xmlns=\"http://www.w3.org/2000/svg\"></svg>"),
+                &budget()
+            ),
             Some(MimeType::ImageSvg)
         );
     }
@@ -347,10 +355,11 @@ mod tests {
     #[test]
     fn unrecognised_bytes_yield_none() {
         let input = bytes_input("x", b"not a known format");
-        assert_eq!(read_actual_mime(&input), None);
+        assert_eq!(read_actual_mime(&input, &budget()), None);
     }
 
     // ---- declared MIME (extension-based) -----------------------------------
+    // (invariati: read_declared_mime non prende zip_budget, nessuna modifica qui sotto)
 
     #[test]
     fn declared_mime_from_bytes_name_extension() {
@@ -416,6 +425,7 @@ mod tests {
     }
 
     // ---- sniff_input ---------------------------------------------------------
+    // (invariati: sniff_input prende &SubresourcesRules, già corretto)
 
     #[test]
     fn sniff_input_reports_detected_mime_type() {

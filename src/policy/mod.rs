@@ -195,13 +195,52 @@ pub enum ActiveContentAction {
     Allow,
 }
 
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct ZipBudgets {
+    pub max_compression_ratio: f64,
+    pub max_total_uncompressed_bytes: u64,
+    pub max_entry_count: u32,
+}
+
+impl Default for ZipBudgets {
+    fn default() -> Self {
+        ZipBudgets {
+            max_compression_ratio: 100.0,
+            max_total_uncompressed_bytes: 1024 * 1024 * 1024,
+            max_entry_count: 10_000,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct XmlBudgets {
+    pub max_entity_depth: u32,
+    pub max_expanded_size: u64,
+    pub max_entity_count: u32,
+}
+
+impl Default for XmlBudgets {
+    fn default() -> Self {
+        XmlBudgets {
+            max_entity_depth: 20,
+            max_expanded_size: 10 * 1024 * 1024,
+            max_entity_count: 10_000,
+        }
+    }
+}
+
 /// Subresources handling rules
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
+
 pub struct SubresourcesRules {
     pub fetch_subresources: bool,
     pub sniff_rule: SniffAction,
     pub active_content_rule: ActiveContentAction,
+    pub zip_budget: ZipBudgets,
+    pub xml_budget: XmlBudgets,
 }
 
 impl Default for SubresourcesRules {
@@ -210,6 +249,8 @@ impl Default for SubresourcesRules {
             fetch_subresources: false,
             sniff_rule: SniffAction::Reject,
             active_content_rule: ActiveContentAction::Reject,
+            zip_budget: ZipBudgets::default(),
+            xml_budget: XmlBudgets::default(),
         }
     }
 }

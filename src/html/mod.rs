@@ -448,7 +448,12 @@ mod tests {
 
     /// A URL checker that never fires: empty block-list, no protected domains.
     fn no_url_checker() -> UrlChecker<'static> {
-        UrlChecker::new(&EMPTY_BLOCKSET, &EMPTY_SKELETONSET, &DEFAULT_VERDICTCACHE, &DEFAULT_RULES)
+        UrlChecker::new(
+            &EMPTY_BLOCKSET,
+            &EMPTY_SKELETONSET,
+            &DEFAULT_VERDICTCACHE,
+            &DEFAULT_RULES,
+        )
     }
 
     fn run(html: &str) -> HtmlOutcome {

@@ -25,7 +25,10 @@ impl SkeletonSet {
                 continue;
             }
             // check if domain is host-parsable
-            Host::parse(domain).map_err(|e| ConfigError::Parse { path: None, message: e.to_string() })?;
+            Host::parse(domain).map_err(|e| ConfigError::Parse {
+                path: None,
+                message: e.to_string(),
+            })?;
             let (unicode, _) = idna::domain_to_unicode(domain);
             let norm = unicode.to_lowercase();
             if norm.is_empty() {

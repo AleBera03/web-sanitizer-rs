@@ -37,7 +37,7 @@ pub fn route(
             }
         }
         Some(MimeType::ApplicationZip) => {
-            if let Some(action) = scan_dos_risks(&sniff_outcome) {
+            if let Some(action) = scan_dos_risks(&sniff_outcome, &policy.subresources) {
                 return RouteOutcome {
                     output: Vec::new(),
                     actions: vec![action],
@@ -54,8 +54,7 @@ pub fn route(
         }
 
         Some(MimeType::ApplicationXml) => {
-            if let Some(action) = scan_dos_risks(&sniff_outcome) {
-                //TODO pass budget policies as argument
+            if let Some(action) = scan_dos_risks(&sniff_outcome, &policy.subresources) {
                 return RouteOutcome {
                     output: Vec::new(),
                     actions: vec![action],

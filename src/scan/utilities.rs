@@ -29,3 +29,12 @@ pub(crate) fn contains_bytes(haystack: &[u8], needle: &[u8]) -> bool {
 pub fn find_bytes(haystack: &[u8], needle: &[u8]) -> Option<usize> {
     haystack.windows(needle.len()).position(|w| w == needle)
 }
+
+pub fn write_u32(data: &mut [u8], offset: usize, value: u32, little_endian: bool) {
+    let bytes = if little_endian {
+        value.to_le_bytes()
+    } else {
+        value.to_be_bytes()
+    };
+    data[offset..offset + 4].copy_from_slice(&bytes);
+}

@@ -31,6 +31,17 @@ pub fn svg_has_active_content(data: &[u8]) -> Vec<SanitisationAction> {
         .collect()
 }
 
+pub fn sanitize_svg(data: &[u8]) -> Vec<u8> {
+    let rules = HtmlRules::default();
+    let checker = UrlChecker::new(
+        &EMPTY_BLOCKSET,
+        &EMPTY_SKELETONSET,
+        &DEFAULT_VERDICTCACHE,
+        &NEUTRAL_URL_RULES,
+    );
+    sanitize_html(data, &rules, &checker).output
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

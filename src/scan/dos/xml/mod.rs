@@ -1,16 +1,12 @@
 use std::collections::{HashMap, HashSet};
 
+use crate::policy::XmlBudgets;
 use crate::scan::utilities::find_bytes;
 
 // constants - declaration to look for in the XML content to detect potential XXE attacks
 const XML_ENTITY_DECL: &[u8] = b"<!ENTITY";
 const XML_ENTITY_SYSTEM: &[u8] = b"SYSTEM";
 const XML_ENTITY_PUBLIC: &[u8] = b"PUBLIC";
-// constants - limits for the XML entity expansion to prevent DoS attacks (spostare dentro policy?)
-const MAX_ENTITY_DEPTH: usize = 20;
-const MAX_EXPANDED_SIZE: u64 = 10 * 1024 * 1024; // 10 MiB, arbitrary sane cap
-const MAX_ENTITY_COUNT: usize = 10_000;
-
 const XML_ACTIVE_CONTENT_MARKERS: &[&[u8]] =
     &[XML_ENTITY_DECL, XML_ENTITY_SYSTEM, XML_ENTITY_PUBLIC];
 
@@ -48,7 +44,7 @@ fn read_quoted(data: &[u8], pos: usize) -> Option<(&[u8], usize)> {
 /// Extracts internal entity declarations (`<!ENTITY name "value">`) into a
 /// name → replacement-text map. External entities (`SYSTEM`/`PUBLIC`) are
 /// skipped: they reference outside resources, not part of in-file expansion.
-fn parse_entities(data: &[u8]) -> Option<HashMap<Vec<u8>, Vec<u8>>> {
+fn parse_entities(data: &[u8], max_entity_count: u32) -> Option<HashMap<Vec<u8>, Vec<u8>>> {
     let mut entities = HashMap::new();
     let mut pos = 0;
 
@@ -79,7 +75,7 @@ fn parse_entities(data: &[u8]) -> Option<HashMap<Vec<u8>, Vec<u8>>> {
         entities.insert(name.to_vec(), value.to_vec());
         pos = after_value;
 
-        if entities.len() > MAX_ENTITY_COUNT {
+        if entities.len() > max_entity_count as usize {
             return None;
         }
     }
@@ -94,8 +90,9 @@ fn expanded_size(
     entities: &HashMap<Vec<u8>, Vec<u8>>,
     visiting: &mut HashSet<Vec<u8>>,
     depth: usize,
+    budget: &XmlBudgets,
 ) -> Option<u64> {
-    if depth > MAX_ENTITY_DEPTH {
+    if depth > budget.max_entity_depth as usize {
         return None;
     }
     if !visiting.insert(name.to_vec()) {
@@ -120,12 +117,12 @@ fn expanded_size(
         };
         let ref_name = &value[amp + 1..amp + 1 + semi_rel];
 
-        let Some(sub) = expanded_size(ref_name, entities, visiting, depth + 1) else {
+        let Some(sub) = expanded_size(ref_name, entities, visiting, depth + 1, budget) else {
             visiting.remove(name);
             return None;
         };
         size += sub;
-        if size > MAX_EXPANDED_SIZE {
+        if size > budget.max_expanded_size {
             visiting.remove(name);
             return None;
         }
@@ -134,17 +131,17 @@ fn expanded_size(
     size += (value.len() - pos) as u64;
 
     visiting.remove(name);
-    (size <= MAX_EXPANDED_SIZE).then_some(size)
+    (size <= budget.max_expanded_size).then_some(size)
 }
 
-pub fn xml_has_dos_risk(data: &[u8]) -> Option<usize> {
-    let Some(entities) = parse_entities(data) else {
+pub fn xml_has_dos_risk(data: &[u8], budget: &XmlBudgets) -> Option<usize> {
+    let Some(entities) = parse_entities(data, budget.max_entity_count) else {
         return Some(0);
     };
 
     entities.iter().find_map(|(name, _)| {
         let mut visiting = HashSet::new();
-        expanded_size(name, &entities, &mut visiting, 0)
+        expanded_size(name, &entities, &mut visiting, 0, budget)
             .is_none()
             .then_some(0)
     })
@@ -160,7 +157,8 @@ mod tests {
 
     #[test]
     fn xml_has_active_content_detects_entity_declarations() {
-        let payload = br#"<?xml version="1.0"?><!DOCTYPE root [<!ENTITY x "hello">]><root>&x;</root>"#;
+        let payload =
+            br#"<?xml version="1.0"?><!DOCTYPE root [<!ENTITY x "hello">]><root>&x;</root>"#;
         assert_eq!(xml_has_active_content(payload), Some(0));
     }
 
@@ -179,18 +177,19 @@ mod tests {
     #[test]
     fn xml_has_dos_risk_returns_none_for_safe_xml() {
         let payload = xml_doc("normal-text");
-        assert_eq!(xml_has_dos_risk(&payload), None);
+        assert_eq!(xml_has_dos_risk(&payload, &XmlBudgets::default()), None);
     }
 
     #[test]
     fn xml_has_dos_risk_detects_recursive_entity_expansion() {
         let payload = br#"<?xml version="1.0"?><!DOCTYPE root [<!ENTITY a "&b;"> <!ENTITY b "&a;">]><root>&a;</root>"#;
-        assert_eq!(xml_has_dos_risk(payload), Some(0));
+        assert_eq!(xml_has_dos_risk(payload, &XmlBudgets::default()), Some(0));
     }
 
     #[test]
     fn xml_has_dos_risk_treats_malformed_entity_blocks_as_risky() {
-        let payload = br#"<?xml version="1.0"?><!DOCTYPE root [<!ENTITY a "&b;"> <!ENTITY b "&a;">]"#;
-        assert_eq!(xml_has_dos_risk(payload), Some(0));
+        let payload =
+            br#"<?xml version="1.0"?><!DOCTYPE root [<!ENTITY a "&b;"> <!ENTITY b "&a;">]"#;
+        assert_eq!(xml_has_dos_risk(payload, &XmlBudgets::default()), Some(0));
     }
 }

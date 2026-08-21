@@ -1,4 +1,4 @@
-use crate::scan::utilities::{read_u16, read_u32};
+use crate::scan::utilities::{read_u16, read_u32, write_u32};
 
 const TIFF_ENTRY_LEN: usize = 12;
 
@@ -45,6 +45,61 @@ pub fn tiff_has_structural_risk(data: &[u8]) -> Option<usize> {
     }
 
     None
+}
+
+/// Truncates the IFD chain at the last structurally valid IFD, zeroing out
+/// its "next IFD offset" field. Leaves `data` untouched if the header itself
+/// is unreadable or the chain is already valid end-to-end.
+pub fn rewrite_tiff(mut data: Vec<u8>) -> Vec<u8> {
+    let Some(little_endian) = tiff_is_little_endian(&data) else {
+        return data;
+    };
+    let Some(mut ifd_offset) = read_u32(&data, 4, little_endian) else {
+        return data;
+    };
+
+    let mut visited = std::collections::HashSet::new();
+    let mut last_next_offset_field: Option<usize> = None;
+    let mut truncated = false;
+
+    while ifd_offset != 0 {
+        let offset = ifd_offset as usize;
+        if !visited.insert(offset) {
+            truncated = true;
+            break;
+        }
+
+        let Some(entry_count) = read_u16(&data, offset, little_endian) else {
+            truncated = true;
+            break;
+        };
+
+        let entries_start = offset + 2;
+        let entries_end = entries_start + entry_count as usize * TIFF_ENTRY_LEN;
+        if data.get(entries_start..entries_end).is_none() {
+            truncated = true;
+            break;
+        }
+
+        let Some(next) = read_u32(&data, entries_end, little_endian) else {
+            truncated = true;
+            break;
+        };
+
+        last_next_offset_field = Some(entries_end);
+        ifd_offset = next;
+    }
+
+    if truncated {
+        if let Some(field_offset) = last_next_offset_field {
+            write_u32(&mut data, field_offset, 0, little_endian);
+        } else {
+            // The very first IFD was already invalid: nothing valid to keep.
+            write_u32(&mut data, 4, 0, little_endian);
+        }
+    }
+
+    data
 }
 
 #[cfg(test)]

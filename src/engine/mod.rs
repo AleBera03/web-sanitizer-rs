@@ -194,7 +194,7 @@ impl Engine {
         }
 
         let sniff_outcome = crate::engine::sniff::run(
-            AcquiredInput::new(input.clone(), data.clone()), 
+            AcquiredInput::new(input.clone(), data.clone()),
             &self.policy.subresources,
             0,
         );

@@ -7,9 +7,9 @@ use crate::report::{Location, MAX_FRAGMENT_BYTES, SanitisationAction, truncate_f
 use crate::scan::dos::xml::xml_has_active_content;
 use crate::scan::dos::zip::zip_has_active_content;
 use crate::sniff::{MimeType, SniffOutcome};
-use pdf::pdf_has_active_content;
-use svg::svg_has_active_content;
-use tiff::tiff_has_structural_risk;
+use pdf::{pdf_has_active_content, sanitize_pdf};
+use svg::{sanitize_svg, svg_has_active_content};
+use tiff::{rewrite_tiff, tiff_has_structural_risk};
 
 pub struct ScanOutcome {
     pub output: Option<Vec<u8>>,
@@ -19,15 +19,16 @@ pub struct ScanOutcome {
 
 pub fn scan_active_content(input: SniffOutcome, rules: &SubresourcesRules) -> ScanOutcome {
     let data = input.output.unwrap_or_default();
+    let mime_type = input.mime_type;
 
-    let detected_actions: Vec<SanitisationAction> = match input.mime_type {
+    let detected_actions: Vec<SanitisationAction> = match mime_type {
         Some(MimeType::ApplicationPdf) => pdf_has_active_content(&data)
             .map(|o| vec![single_action("scan.pdf.active_content", o, &data)])
             .unwrap_or_default(),
         Some(MimeType::ImageTiff) => tiff_has_structural_risk(&data)
             .map(|o| vec![single_action("scan.tiff.structural_risk", o, &data)])
             .unwrap_or_default(),
-        Some(MimeType::ApplicationZip) => zip_has_active_content(&data)
+        Some(MimeType::ApplicationZip) => zip_has_active_content(&data, &rules.zip_budget)
             .map(|o| vec![single_action("scan.zip.macro_present", o, &data)])
             .unwrap_or_default(),
         Some(MimeType::ApplicationXml) => xml_has_active_content(&data)
@@ -51,9 +52,6 @@ pub fn scan_active_content(input: SniffOutcome, rules: &SubresourcesRules) -> Sc
     };
     let refused = policy_action == Action::Refuse;
 
-    // Re-stamp: the detected actions carry whatever `sanitize_html`/format
-    // detection produced internally; the *applied* action is the coarse
-    // subresource-level decision.
     let actions = detected_actions
         .into_iter()
         .map(|a| SanitisationAction {
@@ -62,10 +60,29 @@ pub fn scan_active_content(input: SniffOutcome, rules: &SubresourcesRules) -> Sc
         })
         .collect();
 
+    let output = if refused {
+        None
+    } else {
+        Some(rewrite_if_possible(mime_type, data))
+    };
+
     ScanOutcome {
-        output: if refused { None } else { Some(data) },
+        output,
         actions,
         refused,
+    }
+}
+
+/// Best-effort sanitisation for `Allow` under `active_content_rule`: rewrites
+/// the input when a format-specific rewrite exists, otherwise passes the
+/// original bytes through unchanged (the active content stays present —
+/// see caveats in the project report for formats without a rewrite path).
+fn rewrite_if_possible(mime_type: Option<MimeType>, data: Vec<u8>) -> Vec<u8> {
+    match mime_type {
+        Some(MimeType::ApplicationPdf) => sanitize_pdf(&data).unwrap_or(data),
+        Some(MimeType::ImageTiff) => rewrite_tiff(data),
+        Some(MimeType::ImageSvg) => sanitize_svg(&data),
+        _ => data,
     }
 }
 
@@ -160,7 +177,8 @@ mod tests {
 
     #[test]
     fn pdf_with_active_content_reject_policy() {
-        let data = b"%PDF-1.7\n3 0 obj\n<< /S /JavaScript /JS (app.alert('hi');) >>\nendobj".to_vec();
+        let data =
+            b"%PDF-1.7\n3 0 obj\n<< /S /JavaScript /JS (app.alert('hi');) >>\nendobj".to_vec();
         let outcome = sniff_outcome(Some(MimeType::ApplicationPdf), data);
         let rules = reject_rules();
 
@@ -176,7 +194,8 @@ mod tests {
 
     #[test]
     fn pdf_with_active_content_allow_policy() {
-        let data = b"%PDF-1.7\n3 0 obj\n<< /S /JavaScript /JS (app.alert('hi');) >>\nendobj".to_vec();
+        let data =
+            b"%PDF-1.7\n3 0 obj\n<< /S /JavaScript /JS (app.alert('hi');) >>\nendobj".to_vec();
         let outcome = sniff_outcome(Some(MimeType::ApplicationPdf), data.clone());
         let rules = allow_rules();
 
