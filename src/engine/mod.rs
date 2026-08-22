@@ -61,6 +61,8 @@ use std::fs;
 use std::net::SocketAddr;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::Arc;
+use std::sync::mpsc;
+use std::thread;
 use std::time::{Duration, Instant};
 
 use jiff::Zoned;
@@ -79,12 +81,13 @@ use crate::urlcheck::cache::VerdictCache;
 
 use subresource::{Asset, SubresourceLoop, SubresourceOutcome};
 
+#[derive(Clone)]
 pub struct Engine {
     policy: Arc<Policy>,
-    blockset: BlockSet,
-    skeletonset: SkeletonSet,
-    /// Shared by every worker: read-mostly, so one `RwLock` and no copying.
-    verdictcache: VerdictCache,
+    blockset: Arc<BlockSet>,
+    skeletonset: Arc<SkeletonSet>,
+    /// Shared by every worker.
+    verdictcache: Arc<VerdictCache>,
     fetcher: Arc<dyn Fetcher>,
 }
 
@@ -121,20 +124,20 @@ impl Engine {
     /// Compiles the policy's block-lists; a malformed list is a config error
     /// (exit 2) before any input is touched.
     pub fn new(policy: Policy, fetcher: Arc<dyn Fetcher>) -> Result<Engine, ConfigError> {
-        let blockset = BlockSet::from_files(&policy.urls.blocklists)?;
-        let skeletonset = SkeletonSet::build(
+        let blockset = Arc::new(BlockSet::from_files(&policy.urls.blocklists)?);
+        let skeletonset = Arc::new(SkeletonSet::build(
             policy
                 .urls
                 .protected_domains
                 .iter()
                 .map(|s| s.as_str())
                 .collect(),
-        )?;
+        )?);
         Ok(Engine {
             policy: Arc::new(policy),
             blockset,
             skeletonset,
-            verdictcache: VerdictCache::default(),
+            verdictcache: Arc::new(VerdictCache::default()),
             fetcher,
         })
     }
@@ -144,7 +147,7 @@ impl Engine {
     }
 
     pub fn blockset(&self) -> &BlockSet {
-        &self.blockset
+        &*self.blockset
     }
 
     /// Process a single input. Never panics: the pipeline runs under
@@ -161,6 +164,7 @@ impl Engine {
         F: FnMut(usize, &Outcome),
     {
         let workers = jobs.max(1);
+        let total = inputs.len();
         let mut report = RunReport::assemble(
             Zoned::now().to_string(),
             self.policy.source.to_string(),
@@ -171,11 +175,96 @@ impl Engine {
             },
             Vec::new(),
         );
-        for (index, input) in inputs.into_iter().enumerate() {
-            let outcome = self.process_indexed(index, input);
-            emit(index, &outcome);
-            report.push(outcome.report);
+
+        // Channels for jobs and results
+        let (job_tx, job_rx) = mpsc::channel::<(usize, InputSource)>();
+        let (res_tx, res_rx) = mpsc::channel::<(usize, Outcome)>();
+
+        // Make engine clonable and shareable with workers
+        let engine = Arc::new(self.clone());
+
+        // Wrap receiver so multiple workers can pull from it via a mutex
+        let job_rx = Arc::new(std::sync::Mutex::new(job_rx));
+
+        // Spawn workers
+        let mut handles = Vec::new();
+        let run_start = Arc::new(Instant::now());
+        let max_time = Arc::new(Duration::from_millis(self.policy.budgets.max_time_ms));
+        for _ in 0..workers {
+            let job_rx = Arc::clone(&job_rx);
+            let res_tx = res_tx.clone();
+            let engine = Arc::clone(&engine);
+            let max_time = Arc::clone(&max_time);
+            let run_start = Arc::clone(&run_start);
+            let handle = thread::spawn(move || {
+                loop {
+                    // receive next job
+                    let job = {
+                        let guard = job_rx.lock().unwrap();
+                        guard.recv()
+                    };
+                    let (index, input) = match job {
+                        Ok(pair) => pair,
+                        Err(_) => break, // channel closed -> no more work
+                    };
+
+                    // Respect global time budget: bail out gracefully if exceeded
+                    if run_start.elapsed() > *max_time {
+                        let report = error_report(
+                            input.describe(),
+                            InputStatus::BudgetExceeded,
+                            "run time budget exceeded".to_string(),
+                        );
+                        let outcome = Outcome::failed(report);
+                        let _ = res_tx.send((index, outcome));
+                        continue;
+                    }
+
+                    // Process the input and send result back
+                    let outcome = engine.process_indexed(index, input);
+                    let _ = res_tx.send((index, outcome));
+                }
+            });
+            handles.push(handle);
         }
+
+        // Send jobs
+        for (index, input) in inputs.into_iter().enumerate() {
+            if job_tx.send((index, input)).is_err() {
+                break;
+            }
+        }
+        drop(job_tx); // close the channel so workers can exit when done
+
+        // Collect results as they come in
+        let mut outcomes: Vec<Option<Outcome>> = (0..total).map(|_| None).collect();
+        for _ in 0..total {
+            if let Ok((index, outcome)) = res_rx.recv() {
+                outcomes[index] = Some(outcome);
+            }
+        }
+
+        // Join workers
+        for h in handles {
+            let _ = h.join();
+        }
+
+        // Emit results in-order and assemble report
+        for index in 0..total {
+            if let Some(outcome) = outcomes[index].take() {
+                emit(index, &outcome);
+                report.push(outcome.report);
+            } else {
+                // Shouldn't happen, but produce a generic internal error
+                let err = error_report(
+                    format!("input-{index}"),
+                    InputStatus::InternalError,
+                    "missing outcome".to_string(),
+                );
+                report.push(err);
+            }
+        }
+
         // read once, after every worker is done: the counters order nothing
         report.run.cache_hits = self.verdictcache.hits();
         report.run.resolve_cache_hits = self.fetcher.resolve_cache_hits();
@@ -767,5 +856,95 @@ mod tests {
                 "http://site.test/dir/style.css"
             ]
         );
+    }
+
+    #[test]
+    fn time_budget_triggers_budget_exceeded_in_batch() {
+        struct SlowFetcher;
+        impl crate::fetch::Fetcher for SlowFetcher {
+            fn fetch(
+                &self,
+                url: &Url,
+                _policy: &crate::policy::FetchPolicy,
+                _ctx: FetchContext,
+            ) -> Result<crate::fetch::Fetched, crate::fetch::FetchError> {
+                // sleep to simulate slow network
+                std::thread::sleep(std::time::Duration::from_millis(50));
+                Ok(crate::fetch::Fetched {
+                    final_url: url.clone(),
+                    declared_mime: None,
+                    endpoint: None,
+                    body: b"ok".to_vec(),
+                })
+            }
+        }
+
+        let mut policy = Policy::builtin();
+        policy.budgets.max_time_ms = 10; // very small
+        let engine = Engine::new(policy, Arc::new(SlowFetcher)).unwrap();
+
+        let inputs = vec![
+            InputSource::Url(Url::parse("http://example.test/1").unwrap()),
+            InputSource::Url(Url::parse("http://example.test/2").unwrap()),
+            InputSource::Url(Url::parse("http://example.test/3").unwrap()),
+        ];
+
+        let report = engine.process_batch(inputs, 2, |_, _| {});
+        let exceeded = report
+            .inputs
+            .iter()
+            .filter(|r| r.status == InputStatus::BudgetExceeded)
+            .count();
+        assert!(exceeded >= 1, "expected at least one budget-exceeded input");
+    }
+
+    #[test]
+    fn jobs_zero_uses_at_least_one_worker() {
+        let engine = Engine::new(Policy::builtin(), Arc::new(DisabledFetcher)).unwrap();
+        let report = engine.process_batch(vec![bytes(b"ok")], 0, |_, _| {});
+        assert_eq!(report.run.workers, 1);
+    }
+
+    #[test]
+    fn batch_propagates_fetch_error_for_url_inputs() {
+        let engine = Engine::new(Policy::builtin(), Arc::new(DisabledFetcher)).unwrap();
+        let inputs = vec![InputSource::Url(Url::parse("http://example.com/").unwrap())];
+        let report = engine.process_batch(inputs, 1, |_, _| {});
+        assert_eq!(report.inputs.len(), 1);
+        assert_eq!(report.inputs[0].status, InputStatus::FetchError);
+    }
+
+    #[test]
+    fn pool_runs_workers_concurrently() {
+        struct SleepFetcher(std::time::Duration);
+        impl crate::fetch::Fetcher for SleepFetcher {
+            fn fetch(
+                &self,
+                url: &Url,
+                _policy: &crate::policy::FetchPolicy,
+                _ctx: FetchContext,
+            ) -> Result<crate::fetch::Fetched, crate::fetch::FetchError> {
+                std::thread::sleep(self.0);
+                Ok(crate::fetch::Fetched {
+                    final_url: url.clone(),
+                    declared_mime: None,
+                    endpoint: None,
+                    body: b"x".to_vec(),
+                })
+            }
+        }
+
+        let mut policy = Policy::builtin();
+        policy.budgets.max_time_ms = 5000;
+        let dur = std::time::Duration::from_millis(200);
+        let engine = Engine::new(policy, Arc::new(SleepFetcher(dur))).unwrap();
+        let inputs = vec![
+            InputSource::Url(Url::parse("http://a.test/1").unwrap()),
+            InputSource::Url(Url::parse("http://a.test/2").unwrap()),
+        ];
+        let start = Instant::now();
+        let _ = engine.process_batch(inputs, 2, |_, _| {});
+        let elapsed = start.elapsed();
+        assert!(elapsed < dur * 2, "expected concurrent workers, elapsed={:?}", elapsed);
     }
 }
