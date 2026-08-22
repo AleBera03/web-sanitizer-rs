@@ -26,6 +26,7 @@ const MP3_ID3: &[u8] = b"ID3";
 const MP3_FRAME_SYNC: &[u8] = &[0xFF, 0xFB];
 const AVI_TYPE: &[u8] = b"AVI ";
 const WAVE_TYPE: &[u8] = b"WAVE";
+const WAVE_OFFSET: usize = 8;
 // MP4 files does not have the magic number at offset 0
 const MP4_FTYP: &[u8] = b"ftyp";
 const MP4_FTYP_OFFSET: usize = 4;
@@ -235,7 +236,7 @@ fn read_actual_mime(
         Some(AudioFlac)
     } else if input.data.starts_with(MP3_ID3) || input.data.starts_with(MP3_FRAME_SYNC) {
         Some(AudioMp3)
-    } else if input.data.starts_with(WAVE_TYPE) {
+    } else if input.data.get(WAVE_OFFSET..WAVE_OFFSET + WAVE_TYPE.len()) == Some(WAVE_TYPE) {
         Some(AudioWav)
     } else if input.data.starts_with(AVI_TYPE) {
         Some(VideoAvi)
@@ -287,6 +288,9 @@ fn mime_from_extension(ext: &str) -> Option<MimeType> {
         "zip" => Some(ApplicationZip),
         "xml" => Some(ApplicationXml),
         "flac" => Some(AudioFlac),
+        "mp3" => Some(AudioMp3),
+        "wav" => Some(AudioWav),
+        "mp4" => Some(VideoMp4),
         _ => None,
     }
 }
@@ -332,8 +336,8 @@ pub fn sniff_bytes(data: &[u8]) -> Option<MimeType> {
 
 #[cfg(test)]
 mod tests {
-    use std::path::PathBuf;
     use crate::policy::ZipBudgets;
+    use std::path::PathBuf;
 
     use super::*;
 
@@ -368,13 +372,19 @@ mod tests {
     #[test]
     fn detects_jpeg_from_magic_bytes() {
         let input = bytes_input("x", &[0xFF, 0xD8, 0xFF, 0x00]);
-        assert_eq!(read_actual_mime(&input, &budget()), Some(MimeType::ImageJpeg));
+        assert_eq!(
+            read_actual_mime(&input, &budget()),
+            Some(MimeType::ImageJpeg)
+        );
     }
 
     #[test]
     fn detects_png_from_magic_bytes() {
         let input = bytes_input("x", &[0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]);
-        assert_eq!(read_actual_mime(&input, &budget()), Some(MimeType::ImagePng));
+        assert_eq!(
+            read_actual_mime(&input, &budget()),
+            Some(MimeType::ImagePng)
+        );
     }
 
     #[test]
@@ -392,13 +402,19 @@ mod tests {
     #[test]
     fn detects_html_doctype() {
         let input = bytes_input("x", b"<!DOCTYPE html><html></html>");
-        assert_eq!(read_actual_mime(&input, &budget()), Some(MimeType::TextHtml));
+        assert_eq!(
+            read_actual_mime(&input, &budget()),
+            Some(MimeType::TextHtml)
+        );
     }
 
     #[test]
     fn detects_pdf() {
         let input = bytes_input("x", b"%PDF-1.7 ...");
-        assert_eq!(read_actual_mime(&input, &budget()), Some(MimeType::ApplicationPdf));
+        assert_eq!(
+            read_actual_mime(&input, &budget()),
+            Some(MimeType::ApplicationPdf)
+        );
     }
 
     #[test]
@@ -416,7 +432,10 @@ mod tests {
     #[test]
     fn detects_zip_ooxml() {
         let input = bytes_input("x", &[0x50, 0x4B, 0x03, 0x04, 0x00]);
-        assert_eq!(read_actual_mime(&input, &budget()), Some(MimeType::ApplicationZip));
+        assert_eq!(
+            read_actual_mime(&input, &budget()),
+            Some(MimeType::ApplicationZip)
+        );
     }
 
     #[test]
@@ -450,7 +469,10 @@ mod tests {
     #[test]
     fn detects_xml_and_svg() {
         assert_eq!(
-            read_actual_mime(&bytes_input("x", b"<?xml version=\"1.0\"?><root/>"), &budget()),
+            read_actual_mime(
+                &bytes_input("x", b"<?xml version=\"1.0\"?><root/>"),
+                &budget()
+            ),
             Some(MimeType::ApplicationXml)
         );
         assert_eq!(
