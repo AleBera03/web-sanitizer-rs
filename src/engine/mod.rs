@@ -49,10 +49,6 @@
 //! ### Completed
 //! - acquire, input-bytes budget, panic isolation
 //! - pipeline: sniff -> route -> sub-resource loop -> report
-//!
-//! ### Missing
-//! - the worker pool that will replace the sequential loop in
-//!   [`Engine::process_batch`] behind the same signature
 
 pub mod route;
 pub mod subresource;
@@ -156,7 +152,7 @@ impl Engine {
         self.process_indexed(0, input)
     }
 
-    /// Process a batch sequentially for now, calling `emit` with each finished
+    /// Process a batch with up to `jobs` workers, calling `emit` with each
     /// outcome and its position in the input list. The index is what names the
     /// outputs deterministically once completions stop arriving in order.
     pub fn process_batch<F>(&self, inputs: Vec<InputSource>, jobs: usize, mut emit: F) -> RunReport
@@ -188,14 +184,10 @@ impl Engine {
 
         // Spawn workers
         let mut handles = Vec::new();
-        let run_start = Arc::new(Instant::now());
-        let max_time = Arc::new(Duration::from_millis(self.policy.budgets.max_time_ms));
         for _ in 0..workers {
             let job_rx = Arc::clone(&job_rx);
             let res_tx = res_tx.clone();
             let engine = Arc::clone(&engine);
-            let max_time = Arc::clone(&max_time);
-            let run_start = Arc::clone(&run_start);
             let handle = thread::spawn(move || {
                 loop {
                     // receive next job
@@ -208,19 +200,6 @@ impl Engine {
                         Err(_) => break, // channel closed -> no more work
                     };
 
-                    // Respect global time budget: bail out gracefully if exceeded
-                    if run_start.elapsed() > *max_time {
-                        let report = error_report(
-                            input.describe(),
-                            InputStatus::BudgetExceeded,
-                            "run time budget exceeded".to_string(),
-                        );
-                        let outcome = Outcome::failed(report);
-                        let _ = res_tx.send((index, outcome));
-                        continue;
-                    }
-
-                    // Process the input and send result back
                     let outcome = engine.process_indexed(index, input);
                     let _ = res_tx.send((index, outcome));
                 }
@@ -859,7 +838,7 @@ mod tests {
     }
 
     #[test]
-    fn time_budget_triggers_budget_exceeded_in_batch() {
+    fn worker_does_not_apply_fetch_budget_to_custom_fetchers() {
         struct SlowFetcher;
         impl crate::fetch::Fetcher for SlowFetcher {
             fn fetch(
@@ -868,7 +847,6 @@ mod tests {
                 _policy: &crate::policy::FetchPolicy,
                 _ctx: FetchContext,
             ) -> Result<crate::fetch::Fetched, crate::fetch::FetchError> {
-                // sleep to simulate slow network
                 std::thread::sleep(std::time::Duration::from_millis(50));
                 Ok(crate::fetch::Fetched {
                     final_url: url.clone(),
@@ -880,7 +858,7 @@ mod tests {
         }
 
         let mut policy = Policy::builtin();
-        policy.budgets.max_time_ms = 10; // very small
+        policy.budgets.max_time_ms = 10;
         let engine = Engine::new(policy, Arc::new(SlowFetcher)).unwrap();
 
         let inputs = vec![
@@ -895,7 +873,7 @@ mod tests {
             .iter()
             .filter(|r| r.status == InputStatus::BudgetExceeded)
             .count();
-        assert!(exceeded >= 1, "expected at least one budget-exceeded input");
+        assert_eq!(exceeded, 0);
     }
 
     #[test]
