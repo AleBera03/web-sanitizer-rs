@@ -8,6 +8,8 @@ use std::path::Path;
 use std::process::ExitCode;
 use std::sync::Arc;
 
+use args::{Command, ScanArgs, ServeArgs};
+use axum::serve::Serve;
 use clap::Parser;
 use std::error::Error;
 
@@ -17,22 +19,47 @@ use web_sanitizer::input::{self, OutputName};
 use web_sanitizer::policy::Policy;
 use web_sanitizer::report::{InputReport, InputStatus};
 
+use axum::{Router, routing::get, routing::post};
+
 // CONSTANT
 /// Exit code for configuration/usage errors
 const EXIT_CONFIG: u8 = 2;
 
 fn main() -> ExitCode {
     let args = args::Args::parse();
-    match run(args) {
-        Ok(code) => ExitCode::from(code),
-        Err(message) => {
-            eprintln!("error: {message}");
-            ExitCode::from(EXIT_CONFIG)
-        }
+    match &args.command {
+        Command::Scan(scan_args) => match run(args) {
+            Ok(code) => ExitCode::from(code),
+            Err(message) => {
+                eprintln!("error: {message}");
+                ExitCode::from(EXIT_CONFIG)
+            }
+        },
+        Command::Serve(serve_args) => match serve(args) {
+            Ok(code) => ExitCode::from(code),
+            Err(message) => {
+                eprintln!("error: {message}");
+                ExitCode::from(EXIT_CONFIG)
+            }
+        },
     }
 }
 
-fn run(args: args::Args) -> Result<u8, Box<dyn Error>> {
+#[tokio::main]
+async fn serve(args: args::Args, serve_args: ServeArgs) -> Result<u8, Box<dyn Error>> {
+    // building routes
+    let app = Router::new().route("/", get(|| async { "Hi, I'm listening!" }));
+
+    // run app bound on specified ip and port
+    let listener = tokio::net::TcpListener::bind("{}:{}", serve_args.bind, serve_args.port)
+        .await
+        .unwrap();
+    axum::serve(listener, app).await.unwrap();
+
+    Ok(0)
+}
+
+fn run(args: args::Args, scan_args: ScanArgs) -> Result<u8, Box<dyn Error>> {
     let mut policy = match &args.policy {
         Some(path) => Policy::load(path).map_err(|e| e.to_string())?,
         None => Policy::builtin(),
@@ -41,8 +68,8 @@ fn run(args: args::Args) -> Result<u8, Box<dyn Error>> {
     warn_about_posture(&policy);
 
     let gathered = input::gather(
-        &args.inputs,
-        args.input_list.as_deref(),
+        &scan_args.inputs,
+        scan_args.input_list.as_deref(),
         &policy.input.extensions,
     )
     .map_err(|e| e.to_string())?;
@@ -51,7 +78,7 @@ fn run(args: args::Args) -> Result<u8, Box<dyn Error>> {
     }
 
     // unwritable output directory is detected before processing starts
-    prepare_out_dir(&args.out)?;
+    prepare_out_dir(&scan_args.out)?;
 
     // the fetch client is built from the policy that is about to be moved into
     // the engine, guard included: there is no unguarded client to build
@@ -61,7 +88,7 @@ fn run(args: args::Args) -> Result<u8, Box<dyn Error>> {
 
     let mut write_failures = 0usize;
     let verbose = args.verbose;
-    let out_dir = args.out.clone();
+    let out_dir = scan_args.out.clone();
     let mut report = engine.process_batch(gathered.inputs, args.jobs, |index, outcome| {
         if verbose > 0 {
             log_input(&outcome.report, verbose);
@@ -111,7 +138,7 @@ fn run(args: args::Args) -> Result<u8, Box<dyn Error>> {
 
     let json = serde_json::to_string_pretty(&report)
         .map_err(|e| format!("cannot serialise report: {e}"))?;
-    let report_path = args.out.join("report.json");
+    let report_path = scan_args.out.join("report.json");
     fs::write(&report_path, &json)
         .map_err(|e| format!("cannot write {}: {e}", report_path.display()))?;
     println!("{json}");
