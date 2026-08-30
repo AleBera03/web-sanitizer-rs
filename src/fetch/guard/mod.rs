@@ -29,7 +29,6 @@ use cache::{ResolveCache, ResolveVerdict};
 use resolver::{NameResolver, SystemResolver};
 use table::{AllowList, CATEGORY_SSRF, IpDenyTable};
 
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FetchOrigin {
     /// A URL the user typed.
@@ -49,18 +48,19 @@ pub struct FetchContext {
 }
 
 impl FetchContext {
-    pub fn input_cli() -> FetchContext {
+    pub fn input(origin: FetchOrigin) -> FetchContext {
         FetchContext {
-            origin: FetchOrigin::InputCli,
+            origin,
             parent_endpoint: None,
         }
     }
 
+    pub fn input_cli() -> FetchContext {
+        FetchContext::input(FetchOrigin::InputCli)
+    }
+
     pub fn input_server() -> FetchContext {
-        FetchContext {
-            origin: FetchOrigin::InputServer,
-            parent_endpoint: None,
-        }
+        FetchContext::input(FetchOrigin::InputServer)
     }
 
     pub fn subresource(parent_endpoint: Option<SocketAddr>) -> FetchContext {
@@ -114,7 +114,6 @@ impl Guard {
     pub fn new(rules: &SsrfRules) -> Result<Guard, ConfigError> {
         Guard::with_resolver(rules, Arc::new(SystemResolver))
     }
-
 
     pub fn with_resolver(
         rules: &SsrfRules,
@@ -175,7 +174,6 @@ impl Guard {
         if !scope.guarded {
             return Ok(addrs);
         }
-
 
         let mut exempted = false;
         for candidate in &addrs {

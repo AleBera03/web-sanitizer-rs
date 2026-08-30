@@ -67,7 +67,7 @@ use jiff::Zoned;
 use url::Url;
 
 use crate::fetch::Fetcher;
-use crate::fetch::guard::FetchContext;
+use crate::fetch::guard::{FetchContext, FetchOrigin};
 use crate::html;
 use crate::input::{InputSource, OutputName};
 use crate::policy::protectedset::SkeletonSet;
@@ -86,6 +86,8 @@ pub struct Engine {
     /// Shared by every worker: read-mostly, so one `RwLock` and no copying.
     verdictcache: VerdictCache,
     fetcher: Arc<dyn Fetcher>,
+    /// Which frontend owns the engine.
+    origin: FetchOrigin,
 }
 
 /// Result of processing one input: the report plus the sanitized bytes when
@@ -136,7 +138,13 @@ impl Engine {
             skeletonset,
             verdictcache: VerdictCache::default(),
             fetcher,
+            origin: FetchOrigin::InputCli,
         })
+    }
+
+    pub fn with_origin(mut self, origin: FetchOrigin) -> Engine {
+        self.origin = origin;
+        self
     }
 
     pub fn policy(&self) -> &Policy {
@@ -352,7 +360,7 @@ impl Engine {
                 }
                 let fetched = self
                     .fetcher
-                    .fetch(url, &self.policy.fetch, FetchContext::input_cli())
+                    .fetch(url, &self.policy.fetch, FetchContext::input(self.origin))
                     .map_err(fetch_failure)?;
                 Ok(Acquired {
                     data: fetched.body,
@@ -582,6 +590,7 @@ mod tests {
         body: Vec<u8>,
         mime: Option<String>,
         requested: std::sync::Mutex<Vec<String>>,
+        contexts: std::sync::Mutex<Vec<FetchContext>>,
     }
 
     impl RecordingFetcher {
@@ -590,11 +599,16 @@ mod tests {
                 body: body.to_vec(),
                 mime: mime.map(String::from),
                 requested: std::sync::Mutex::new(Vec::new()),
+                contexts: std::sync::Mutex::new(Vec::new()),
             })
         }
 
         fn requested(&self) -> Vec<String> {
             self.requested.lock().unwrap().clone()
+        }
+
+        fn contexts(&self) -> Vec<FetchContext> {
+            self.contexts.lock().unwrap().clone()
         }
     }
 
@@ -603,9 +617,10 @@ mod tests {
             &self,
             url: &Url,
             _policy: &crate::policy::FetchPolicy,
-            _ctx: FetchContext,
+            ctx: FetchContext,
         ) -> Result<crate::fetch::Fetched, crate::fetch::FetchError> {
             self.requested.lock().unwrap().push(url.to_string());
+            self.contexts.lock().unwrap().push(ctx);
             Ok(crate::fetch::Fetched {
                 final_url: url.clone(),
                 declared_mime: self.mime.clone(),
@@ -623,6 +638,47 @@ mod tests {
             name: "page.html".to_string(),
             data: PAGE.to_vec(),
         }
+    }
+
+    fn url_input() -> InputSource {
+        InputSource::Url(Url::parse("http://site.test/page.html").unwrap())
+    }
+
+    #[test]
+    fn an_input_url_is_fetched_as_cli_input_by_default() {
+        let fetcher = RecordingFetcher::new(b"", Some("text/plain"));
+        let engine = Engine::new(Policy::builtin(), fetcher.clone()).unwrap();
+        engine.process(url_input());
+
+        assert_eq!(fetcher.contexts(), [FetchContext::input_cli()]);
+    }
+
+    #[test]
+    fn a_server_engine_marks_its_input_urls_as_server_input() {
+        // the guard scope of `guard_input_urls = server` has no effect unless
+        // the origin reaches the fetcher, so this is what makes it real
+        let fetcher = RecordingFetcher::new(b"", Some("text/plain"));
+        let engine = Engine::new(Policy::builtin(), fetcher.clone())
+            .unwrap()
+            .with_origin(FetchOrigin::InputServer);
+        engine.process(url_input());
+
+        assert_eq!(fetcher.contexts(), [FetchContext::input_server()]);
+    }
+
+    #[test]
+    fn the_origin_does_not_leak_into_subresource_requests() {
+        // a reference read out of a document is always guarded, whichever
+        // front-end submitted the parent
+        let fetcher = RecordingFetcher::new(b"body{}", Some("text/css"));
+        let mut policy = Policy::builtin();
+        policy.subresources.fetch_subresources = true;
+        let engine = Engine::new(policy, fetcher.clone())
+            .unwrap()
+            .with_origin(FetchOrigin::InputServer);
+        engine.process(page());
+
+        assert_eq!(fetcher.contexts(), [FetchContext::subresource(None)]);
     }
 
     #[test]

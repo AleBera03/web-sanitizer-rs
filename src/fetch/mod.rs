@@ -108,8 +108,7 @@ pub struct Fetched {
     pub final_url: Url,
     /// `Content-Type` as declared by the server; sniffing may overrule it.
     pub declared_mime: Option<String>,
-    /// Vetted address the last hop was made to, carried so a sub-resource of
-    /// this document can be compared against it (T-11.5).
+    /// Vetted address the last hop was made to.
     pub endpoint: Option<SocketAddr>,
     pub body: Vec<u8>,
 }

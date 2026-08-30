@@ -2,23 +2,22 @@
 //! No sanitisation logic lives here
 
 mod args;
+mod serve;
 
 use std::fs;
 use std::path::Path;
 use std::process::ExitCode;
 use std::sync::Arc;
 
-use args::{Command, ScanArgs, ServeArgs};
+use args::{Command, ScanArgs};
 use clap::Parser;
 use std::error::Error;
 
+use web_sanitizer::Engine;
 use web_sanitizer::fetch::HttpFetcher;
-use web_sanitizer::input::{self, InputSource, OutputName};
+use web_sanitizer::input::{self, OutputName};
 use web_sanitizer::policy::Policy;
 use web_sanitizer::report::{InputReport, InputStatus};
-use web_sanitizer::{Engine, scan};
-
-use axum::{Router, extract::State, response::IntoResponse, routing::get, routing::post};
 
 // CONSTANT
 /// Exit code for configuration/usage errors
@@ -26,83 +25,29 @@ const EXIT_CONFIG: u8 = 2;
 
 fn main() -> ExitCode {
     let args = args::Args::parse();
+    match dispatch(&args) {
+        Ok(code) => ExitCode::from(code),
+        Err(message) => {
+            eprintln!("error: {message}");
+            ExitCode::from(EXIT_CONFIG)
+        }
+    }
+}
+fn dispatch(args: &args::Args) -> Result<u8, Box<dyn Error>> {
+    let mut policy = match &args.policy {
+        Some(path) => Policy::load(path).map_err(|e| e.to_string())?,
+        None => Policy::builtin(),
+    };
+    args.override_policy(&mut policy);
+    warn_about_posture(&policy);
+
     match &args.command {
-        Command::Scan(scan_args) => match run(&args, scan_args) {
-            Ok(code) => ExitCode::from(code),
-            Err(message) => {
-                eprintln!("error: {message}");
-                ExitCode::from(EXIT_CONFIG)
-            }
-        },
-        Command::Serve(serve_args) => match serve(&args, serve_args) {
-            Ok(code) => ExitCode::from(code),
-            Err(message) => {
-                eprintln!("error: {message}");
-                ExitCode::from(EXIT_CONFIG)
-            }
-        },
+        Command::Scan(scan_args) => run(args, scan_args, policy),
+        Command::Serve(serve_args) => serve::run(policy, serve_args),
     }
 }
 
-#[tokio::main]
-async fn serve(args: &args::Args, serve_args: &ServeArgs) -> Result<u8, Box<dyn Error>> {
-    // build engine
-    let mut policy = match &args.policy {
-        Some(path) => Policy::load(path).map_err(|e| e.to_string())?,
-        None => Policy::builtin(),
-    };
-    args.override_policy(&mut policy);
-    warn_about_posture(&policy);
-    let fetcher =
-        Arc::new(HttpFetcher::new(&policy.fetch, &policy.ssrf).map_err(|e| e.to_string())?);
-    let engine = Arc::new(Engine::new(policy, fetcher).map_err(|e| e.to_string())?);
-
-    // build api routes
-    let app = Router::new()
-        .route("/", get(|| async { "Hi, I'm listening!" }))
-        .route("/v1/resources", post(run_from_serve))
-        .with_state(engine);
-
-    // build address from specified ip and port
-    let address = format!("{}:{}", serve_args.bind, serve_args.port);
-
-    // run app
-    let listener = tokio::net::TcpListener::bind(address).await.unwrap();
-    axum::serve(listener, app).await.unwrap();
-
-    Ok(0)
-}
-
-async fn run_from_serve(
-    State(engine): State<Arc<Engine>>,
-    body: axum::body::Bytes,
-) -> impl IntoResponse {
-    let input = InputSource::Bytes {
-        data: body.to_vec(),
-        name: String::new(),
-    };
-    let outcome = match tokio::task::spawn_blocking(move || engine.process(input)).await {
-        Ok(outcome) => outcome,
-        Err(_) => {
-            return (
-                axum::http::StatusCode::INTERNAL_SERVER_ERROR,
-                "processing panicked",
-            )
-                .into_response();
-        }
-    };
-
-    axum::Json(outcome.report).into_response()
-}
-
-fn run(args: &args::Args, scan_args: &ScanArgs) -> Result<u8, Box<dyn Error>> {
-    let mut policy = match &args.policy {
-        Some(path) => Policy::load(path).map_err(|e| e.to_string())?,
-        None => Policy::builtin(),
-    };
-    args.override_policy(&mut policy);
-    warn_about_posture(&policy);
-
+fn run(args: &args::Args, scan_args: &ScanArgs, policy: Policy) -> Result<u8, Box<dyn Error>> {
     let gathered = input::gather(
         &scan_args.inputs,
         scan_args.input_list.as_deref(),
@@ -209,11 +154,15 @@ fn prepare_out_dir(out: &Path) -> Result<(), String> {
     Ok(())
 }
 
-fn log_input(report: &InputReport, verbose: u8) {
-    let status = serde_json::to_value(report.status)
+pub fn status_slug(status: InputStatus) -> String {
+    serde_json::to_value(status)
         .ok()
         .and_then(|v| v.as_str().map(String::from))
-        .unwrap_or_default();
+        .unwrap_or_default()
+}
+
+fn log_input(report: &InputReport, verbose: u8) {
+    let status = status_slug(report.status);
     match &report.error {
         Some(cause) => eprintln!("{status} {} — {cause}", report.source),
         None => eprintln!(

@@ -385,7 +385,6 @@ fn url_refusal(verdict: Verdict) -> Option<&'static str> {
     }
 }
 
-
 fn effective_type(sniffed: Option<MimeType>, claimed: SubresourceType) -> Option<SubresourceType> {
     match sniffed {
         None => Some(claimed),

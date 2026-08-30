@@ -241,7 +241,6 @@ impl IpDenyTable {
     }
 }
 
-
 #[derive(Debug, Clone, Default)]
 pub struct AllowList {
     hosts: Vec<String>,

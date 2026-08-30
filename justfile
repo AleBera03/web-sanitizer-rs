@@ -2,7 +2,7 @@ import 'doc/spec/ignore.just'
 
 [group("docs")]
 docgen: # see doc/gen after launched command
-    rustdoc --lib --target-dir doc/gen
+    rustdoc --target-dir doc/gen
 
 [group("final-report")]
 book-deps:
@@ -11,3 +11,21 @@ book-deps:
 [group("final-report")]
 book-build:
     mdbook build final_report
+
+[group("test")]
+serve:
+    cargo run -- --policy scripts/policy.toml serve --port 3000
+
+[group("test")]
+load-image:
+    docker load -i scripts/evil-origin.tar
+
+[group("test")]
+run-image: load-image
+    docker container stop evil-origin
+    docker container rm evil-origin
+    docker run -d -p 3100:3100 --name evil-origin evil-origin
+
+[group("test")]
+test:
+    curl -s -X POST http://localhost:3000/v1/resources -H "Content-Type: application/json" -d '{"url": "http://localhost:3100/html/script-tag"}'

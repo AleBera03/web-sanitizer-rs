@@ -79,7 +79,7 @@ pub fn route(
                     actions: vec![action],
                     refused: true,
                     references: Vec::new(),
-                    base: None
+                    base: None,
                 };
             }
             scan_active_content(sniff_outcome, &policy.subresources).into()
@@ -92,7 +92,7 @@ pub fn route(
                     actions: vec![action],
                     refused: true,
                     references: Vec::new(),
-                    base: None
+                    base: None,
                 };
             }
             scan_active_content(sniff_outcome, &policy.subresources).into()
