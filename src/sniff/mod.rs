@@ -17,6 +17,7 @@ const PNG: &[u8] = &[0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A];
 const GIF87A: &[u8] = b"GIF87a";
 const GIF89A: &[u8] = b"GIF89a";
 const HTML_DOCTYPE: &[u8] = b"<!DOCTYPE html>";
+const HTML_DOCTYPE_CASE: &[u8] = b"<!doctype html>";
 const PDF: &[u8] = b"%PDF-";
 const XML: &[u8] = b"<?xml";
 const FLAC: &[u8] = b"fLaC";
@@ -218,7 +219,7 @@ fn read_actual_mime(
         Some(ImagePng)
     } else if input.data.starts_with(GIF87A) || input.data.starts_with(GIF89A) {
         Some(ImageGif)
-    } else if input.data.starts_with(HTML_DOCTYPE) {
+    } else if input.data.starts_with(HTML_DOCTYPE) || input.data.starts_with(HTML_DOCTYPE_CASE) {
         Some(TextHtml)
     } else if input.data.starts_with(PDF) {
         Some(ApplicationPdf)
