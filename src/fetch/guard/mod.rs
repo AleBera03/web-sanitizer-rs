@@ -2,14 +2,13 @@
 //! and refuses the connection if any of them is forbidden.
 //!
 //! Three layers, from pure to impure:
-//! - [`table`] classifies an address
+//! - [`crate::netaddr`] classifies an address, and is shared with `urlcheck`
 //! - [`resolver`] turns a name into addresses behind an injectable trait
 //! - [`cache`] remembers verdicts with deny/allow asymmetry
 //! - [`GuardedResolver`] composes them and is handed to `ureq` through `Agent::with_parts`
 
 pub mod cache;
 pub mod resolver;
-pub mod table;
 
 use std::cell::Cell;
 use std::fmt;
@@ -23,11 +22,11 @@ use ureq::http::Uri;
 use ureq::unversioned::resolver::{ResolvedSocketAddrs, Resolver};
 use ureq::unversioned::transport::NextTimeout;
 
+use crate::netaddr::{AllowList, CATEGORY_SSRF, IpDenyTable};
 use crate::policy::{ConfigError, GuardScope, SsrfRules};
 
 use cache::{ResolveCache, ResolveVerdict};
 use resolver::{NameResolver, SystemResolver};
-use table::{AllowList, CATEGORY_SSRF, IpDenyTable};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FetchOrigin {

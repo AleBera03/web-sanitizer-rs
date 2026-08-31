@@ -27,8 +27,11 @@
 //! |---|---|---|
 //! | host on a block-list | `url.blocklist` | `blocklist` |
 //! | homograph of protected domain | `url.homograph` | `homograph` |
-//! | `xn--` IDN host (report) | `url.idn` | `idn_url` |
-//! | control-char / host-split | `url.malformed` | `malformed` |
+//! | unicode IDN host, emitted as ascii | `url.idn` | `idn_url` |
+//! | control chars in the value | `url.malformed` | `malformed` |
+//! | authority written unlike it parses | `url.normalised` | `host_spoof` |
+//! | credentials in the authority | `url.userinfo` | `host_spoof` |
+//! | address literal we cannot reach | `ssrf.*` | `ssrf` |
 
 mod entity;
 mod references;
@@ -38,9 +41,10 @@ use std::cell::{Cell, RefCell};
 use lol_html::html_content::{ContentType, Element};
 use lol_html::{HandlerTypes, HtmlRewriter, Settings, element};
 
+use crate::netaddr::CATEGORY_SSRF;
 use crate::policy::{Action, HtmlRules};
 use crate::report::{Location, MAX_FRAGMENT_BYTES, SanitisationAction, truncate_fragment};
-use crate::urlcheck::{UrlChecker, Verdict};
+use crate::urlcheck::{Label, UrlChecker};
 
 pub use references::{Reference, rewrite_references};
 
@@ -324,16 +328,27 @@ impl Ctx<'_> {
             let Some(value) = el.get_attribute(name) else {
                 continue;
             };
-            let (rule_id, category, action) = match self.url.check(&value) {
-                Verdict::Clean => continue,
-                Verdict::Blocked => ("url.blocklist", "blocklist", rules.action_blocked),
-                Verdict::Homograph => ("url.homograph", "homograph", rules.action_homograph),
-                Verdict::Idn => ("url.idn", "idn_url", Action::Allow),
-                Verdict::Malformed => ("url.malformed", "malformed", rules.action_blocked),
+            let verdict = self.url.check(&value);
+            let (rule_id, category, action) = match verdict.label {
+                Label::Clean if verdict.canonical.is_some() => {
+                    ("url.normalised", "host_spoof", Action::Rewrite)
+                }
+                Label::Clean => continue,
+                Label::Blocked => ("url.blocklist", "blocklist", rules.action_blocked),
+                Label::Homograph => ("url.homograph", "homograph", rules.action_homograph),
+                Label::UserInfo => ("url.userinfo", "host_spoof", rules.action_userinfo),
+                Label::Internal(rule) => (rule, CATEGORY_SSRF, rules.action_internal),
+                Label::Idn if verdict.canonical.is_none() => ("url.idn", "idn_url", Action::Allow),
+                Label::Idn => ("url.idn", "idn_url", rules.action_idn),
+                Label::Malformed => ("url.malformed", "malformed", rules.action_blocked),
             };
             let location = self.location(el);
             let original = attr_fragment(name, &value);
-            let replacement = self.apply_url_action(el, name, action, &rules.placeholder_url);
+            let target = verdict
+                .canonical
+                .as_deref()
+                .unwrap_or(&rules.placeholder_url);
+            let replacement = self.apply_url_action(el, name, action, target);
             self.record(SanitisationAction {
                 rule_id: rule_id.to_string(),
                 category: category.to_string(),
@@ -345,10 +360,6 @@ impl Ctx<'_> {
         }
     }
 
-    /// Apply an attribute-level URL action, returning the recorded replacement.
-    /// `remove` drops the attribute; `rewrite`/`placeholder`/`refuse` set it to
-    /// the configured placeholder URL (refuse also flags the input); `allow`
-    /// leaves it untouched (report-only).
     fn apply_url_action<H: HandlerTypes>(
         &self,
         el: &mut Element<'_, '_, H>,
@@ -453,6 +464,7 @@ pub(crate) mod tests_support {
     use std::sync::LazyLock;
 
     use super::*;
+    use crate::netaddr::IpDenyTable;
     use crate::policy::UrlRules;
     use crate::policy::blockset::BlockSet;
     use crate::policy::protectedset::SkeletonSet;
@@ -460,6 +472,7 @@ pub(crate) mod tests_support {
 
     static EMPTY_BLOCKSET: LazyLock<BlockSet> = LazyLock::new(BlockSet::default);
     static EMPTY_SKELETONSET: LazyLock<SkeletonSet> = LazyLock::new(SkeletonSet::default);
+    static BUILTIN_ADDRESSES: LazyLock<IpDenyTable> = LazyLock::new(IpDenyTable::builtin);
     static DEFAULT_VERDICTCACHE: LazyLock<VerdictCache> = LazyLock::new(VerdictCache::default);
     static DEFAULT_RULES: LazyLock<UrlRules> = LazyLock::new(UrlRules::default);
 
@@ -468,6 +481,7 @@ pub(crate) mod tests_support {
         UrlChecker::new(
             &EMPTY_BLOCKSET,
             &EMPTY_SKELETONSET,
+            &BUILTIN_ADDRESSES,
             &DEFAULT_VERDICTCACHE,
             &DEFAULT_RULES,
         )
@@ -486,6 +500,7 @@ pub(crate) mod tests_support {
 mod tests {
     use super::tests_support::{no_url_checker, sanitize_default, sanitize_with};
     use super::*;
+    use crate::netaddr::IpDenyTable;
     use crate::policy::UrlRules;
     use crate::policy::blockset::BlockSet;
     use crate::policy::protectedset::SkeletonSet;
@@ -740,7 +755,8 @@ mod tests {
         };
         let skeletons = SkeletonSet::set_from_list(protected);
         let verdicache = VerdictCache::default();
-        let checker = UrlChecker::new(&blockset, &skeletons, &verdicache, &rules);
+        let addresses = IpDenyTable::builtin();
+        let checker = UrlChecker::new(&blockset, &skeletons, &addresses, &verdicache, &rules);
         sanitize_html(html.as_bytes(), &HtmlRules::default(), &checker)
     }
 
@@ -864,5 +880,114 @@ mod tests {
         );
         assert_eq!(o.actions.len(), 1);
         assert_eq!(o.actions[0].rule_id, "html.attr.dangerous_scheme");
+    }
+
+    #[test]
+    fn a_host_split_anchor_is_emitted_in_parsed_form() {
+        // the attribute keeps the host the checker validated, so a browser
+        // reading the sanitised document cannot resolve it anywhere else
+        let o = run_urls(
+            "<a href=\"http://169.254.169.254\u{FF0E}other.test/\">x</a>",
+            &[],
+            &[],
+        );
+        assert_eq!(o.actions.len(), 1);
+        assert_eq!(o.actions[0].rule_id, "url.normalised");
+        assert_eq!(o.actions[0].category, "host_spoof");
+        assert_eq!(o.actions[0].action, Action::Rewrite);
+        let s = out(&o);
+        assert!(s.contains(r#"href="http://169.254.169.254.other.test/""#));
+        assert!(!s.contains('\u{FF0E}'));
+    }
+
+    #[test]
+    fn an_anchor_carrying_credentials_loses_them() {
+        let o = run_urls(
+            r#"<a href="http://trusted.example.com@other.test/">x</a>"#,
+            &[],
+            &[],
+        );
+        assert_eq!(o.actions.len(), 1);
+        assert_eq!(o.actions[0].rule_id, "url.userinfo");
+        assert_eq!(o.actions[0].action, Action::Rewrite);
+        assert_eq!(
+            o.actions[0].replacement.as_deref(),
+            Some("http://other.test/")
+        );
+        let s = out(&o);
+        assert!(s.contains(r#"href="http://other.test/""#));
+        assert!(!s.contains("trusted.example.com"));
+    }
+
+    #[test]
+    fn a_unicode_idn_anchor_ships_as_punycode() {
+        let spoof = "http://www.\u{0430}\u{0440}\u{0440}\u{04CF}\u{0435}.com/login";
+        let o = run_urls(&format!(r#"<a href="{spoof}">Apple</a>"#), &[], &[]);
+        assert_eq!(o.actions.len(), 1);
+        assert_eq!(o.actions[0].rule_id, "url.idn");
+        assert_eq!(o.actions[0].action, Action::Rewrite);
+        let s = out(&o);
+        assert!(s.contains(r#"href="http://www.xn--80ak6aa92e.com/login""#));
+        assert!(!s.contains('\u{0430}'));
+    }
+
+    #[test]
+    fn an_idn_policy_of_allow_keeps_the_unicode_spelling() {
+        let blockset = BlockSet::default();
+        let rules = UrlRules {
+            action_idn: Action::Allow,
+            ..Default::default()
+        };
+        let skeletons = SkeletonSet::default();
+        let addresses = IpDenyTable::builtin();
+        let verdicache = VerdictCache::default();
+        let checker = UrlChecker::new(&blockset, &skeletons, &addresses, &verdicache, &rules);
+        let spoof = "http://m\u{00fc}nchen.de/";
+        let o = sanitize_html(
+            format!(r#"<a href="{spoof}">x</a>"#).as_bytes(),
+            &HtmlRules::default(),
+            &checker,
+        );
+        assert_eq!(o.actions.len(), 1);
+        assert_eq!(o.actions[0].rule_id, "url.idn");
+        assert_eq!(o.actions[0].action, Action::Allow);
+        assert!(String::from_utf8_lossy(&o.output).contains(spoof));
+    }
+
+    #[test]
+    fn references_to_internal_addresses_are_rewritten() {
+        let o = run_urls(
+            r#"<iframe src="http://169.254.169.254/"></iframe><img src="http://169.254.169.254/latest/meta-data/"><a href="http://10.0.0.1/internal">x</a>"#,
+            &[],
+            &[],
+        );
+        let rules: Vec<&str> = o.actions.iter().map(|a| a.rule_id.as_str()).collect();
+        assert_eq!(
+            rules,
+            ["html.frame.disallowed", "ssrf.link_local", "ssrf.private",]
+        );
+        assert_eq!(o.actions[1].category, "ssrf");
+        let s = out(&o);
+        assert!(!s.contains("169.254.169.254"));
+        assert!(!s.contains("10.0.0.1"));
+    }
+
+    #[test]
+    fn a_routable_address_reference_is_left_alone() {
+        let o = run_urls(r#"<img src="http://93.184.216.34/p.gif">"#, &[], &[]);
+        assert!(o.actions.is_empty());
+        assert!(out(&o).contains("93.184.216.34"));
+    }
+
+    #[test]
+    fn a_blocked_host_split_url_still_goes_to_the_placeholder() {
+        let o = run_urls(
+            "<a href=\"http://sub\u{FF0E}evil.com/\">x</a>",
+            &["0.0.0.0 evil.com"],
+            &[],
+        );
+        assert_eq!(o.actions.len(), 1);
+        assert_eq!(o.actions[0].rule_id, "url.blocklist");
+        assert!(out(&o).contains(r##"href="#blocked""##));
     }
 }

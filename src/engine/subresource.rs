@@ -29,7 +29,7 @@ use crate::html::Reference;
 use crate::policy::{Action, FetchPolicy, Policy, SniffAction, SubresourceType};
 use crate::report::{GuardBlock, InputStatus, SanitisationAction, SubresourceReport};
 use crate::sniff::{MimeType, SniffOutcome, mime_from_content_type, sniff_bytes};
-use crate::urlcheck::{UrlChecker, Verdict};
+use crate::urlcheck::{Label, UrlChecker, Verdict};
 
 use super::route::route;
 
@@ -377,11 +377,12 @@ impl<'a> SubresourceLoop<'a> {
 
 /// The rule that refuses a URL before any request, if one does.
 fn url_refusal(verdict: Verdict) -> Option<&'static str> {
-    match verdict {
-        Verdict::Blocked => Some("host is on a block-list"),
-        Verdict::Homograph => Some("host is a homograph of a protected domain"),
-        Verdict::Malformed => Some("url is malformed"),
-        Verdict::Clean | Verdict::Idn => None,
+    match verdict.label {
+        Label::Blocked => Some("host is on a block-list"),
+        Label::Homograph => Some("host is a homograph of a protected domain"),
+        Label::Malformed => Some("url is malformed"),
+        Label::UserInfo => Some("url carries credentials in its authority"),
+        Label::Clean | Label::Idn | Label::Internal(_) => None,
     }
 }
 
@@ -718,7 +719,8 @@ mod tests {
         let skeletons = crate::policy::protectedset::SkeletonSet::default();
         let cache = crate::urlcheck::cache::VerdictCache::default();
         let rules = crate::policy::UrlRules::default();
-        let checker = UrlChecker::new(&blockset, &skeletons, &cache, &rules);
+        let addresses = crate::netaddr::IpDenyTable::builtin();
+        let checker = UrlChecker::new(&blockset, &skeletons, &addresses, &cache, &rules);
         let fetcher = StubFetcher::new().otherwise(b"body{}", Some("text/css"));
 
         let outcome = SubresourceLoop::new(

@@ -7,6 +7,7 @@ pub mod engine;
 pub mod fetch;
 pub mod html;
 pub mod input;
+pub mod netaddr;
 pub mod policy;
 pub mod report;
 pub mod scan;

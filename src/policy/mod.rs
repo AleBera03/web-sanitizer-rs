@@ -97,7 +97,9 @@ pub struct UrlRules {
     pub protected_domains: Vec<String>,
     pub action_blocked: Action,
     pub action_homograph: Action,
-    /// Replacement value when a URL action is `rewrite`
+    pub action_userinfo: Action,
+    pub action_internal: Action,
+    pub action_idn: Action,
     pub placeholder_url: String,
 }
 
@@ -108,6 +110,9 @@ impl Default for UrlRules {
             protected_domains: Vec::new(),
             action_blocked: Action::Rewrite,
             action_homograph: Action::Rewrite,
+            action_userinfo: Action::Rewrite,
+            action_internal: Action::Rewrite,
+            action_idn: Action::Rewrite,
             placeholder_url: "#blocked".to_string(),
         }
     }

@@ -70,6 +70,7 @@ use crate::fetch::Fetcher;
 use crate::fetch::guard::{FetchContext, FetchOrigin};
 use crate::html;
 use crate::input::{InputSource, OutputName};
+use crate::netaddr::IpDenyTable;
 use crate::policy::protectedset::SkeletonSet;
 use crate::policy::{ConfigError, Policy, blockset::BlockSet};
 use crate::report::{InputReport, InputStatus, RunCounters, RunReport};
@@ -83,6 +84,7 @@ pub struct Engine {
     policy: Arc<Policy>,
     blockset: BlockSet,
     skeletonset: SkeletonSet,
+    addresses: IpDenyTable,
     /// Shared by every worker: read-mostly, so one `RwLock` and no copying.
     verdictcache: VerdictCache,
     fetcher: Arc<dyn Fetcher>,
@@ -132,10 +134,12 @@ impl Engine {
                 .map(|s| s.as_str())
                 .collect(),
         )?;
+        let addresses = IpDenyTable::compile(&policy.ssrf)?;
         Ok(Engine {
             policy: Arc::new(policy),
             blockset,
             skeletonset,
+            addresses,
             verdictcache: VerdictCache::default(),
             fetcher,
             origin: FetchOrigin::InputCli,
@@ -235,6 +239,7 @@ impl Engine {
         let checker = UrlChecker::new(
             &self.blockset,
             &self.skeletonset,
+            &self.addresses,
             &self.verdictcache,
             &self.policy.urls,
         );
