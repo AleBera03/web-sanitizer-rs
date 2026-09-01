@@ -256,15 +256,20 @@ impl Engine {
         let names = OutputName::derive(index, &source);
         let subresources =
             self.fetch_subresources(&routed, &checker, url.as_ref(), endpoint, &names, start);
-        let output = match &subresources {
-            Some(sub) if !sub.rewrites.is_empty() => {
-                html::rewrite_references(&routed.output, &sub.rewrites)
-            }
-            _ => routed.output,
-        };
-
         let mut actions = sniff_actions;
         actions.extend(routed.actions);
+        let (output, assets, reports) = match subresources {
+            Some(sub) => {
+                actions.extend(sub.actions);
+                let output = match sub.rewrites.is_empty() {
+                    true => routed.output,
+                    false => html::rewrite_references(&routed.output, &sub.rewrites),
+                };
+                (output, sub.assets, Some(sub.reports))
+            }
+            None => (routed.output, Vec::new(), None),
+        };
+
         let refused = sniff_refused || routed.refused;
         let status = if refused {
             InputStatus::Refused
@@ -272,11 +277,6 @@ impl Engine {
             InputStatus::Clean
         } else {
             InputStatus::Sanitised
-        };
-
-        let (assets, reports) = match subresources {
-            Some(sub) => (sub.assets, Some(sub.reports)),
-            None => (Vec::new(), None),
         };
         // a refused input produces a report and nothing else: handing bytes
         // back would let the front-ends write an output file for it
@@ -396,6 +396,10 @@ fn fetch_failure(error: crate::fetch::FetchError) -> (InputStatus, String) {
         crate::fetch::FetchError::SsrfBlocked { address, rule, .. } => (
             InputStatus::SsrfBlocked,
             format!("{rule} refuses {address}"),
+        ),
+        crate::fetch::FetchError::BodyTooLarge { cap } => (
+            InputStatus::BudgetExceeded,
+            format!("response body is over the {cap} byte budget"),
         ),
         other => (InputStatus::FetchError, other.to_string()),
     }
@@ -721,6 +725,39 @@ mod tests {
     }
 
     #[test]
+    fn a_page_that_lost_a_reference_is_sanitised_rather_than_clean() {
+        let fetcher = RecordingFetcher::new(b"body{}", Some("text/css"));
+        let mut policy = Policy::builtin();
+        policy.subresources.fetch_subresources = true;
+        policy.subresources.max_requests = 0;
+        let engine = Engine::new(policy, fetcher.clone()).unwrap();
+        let outcome = engine.process(page());
+
+        assert!(fetcher.requested().is_empty());
+        assert_eq!(outcome.report.status, InputStatus::Sanitised);
+        assert_eq!(outcome.report.actions.len(), 1);
+        assert_eq!(
+            outcome.report.actions[0].rule_id,
+            "subresource.budget_exceeded"
+        );
+
+        let html = String::from_utf8(outcome.sanitized.unwrap()).unwrap();
+        assert!(html.contains(r##"href="#blocked""##), "{html}");
+    }
+
+    #[test]
+    fn a_page_whose_references_all_arrived_stays_clean() {
+        let fetcher = RecordingFetcher::new(b"body{}", Some("text/css"));
+        let mut policy = Policy::builtin();
+        policy.subresources.fetch_subresources = true;
+        let engine = Engine::new(policy, fetcher).unwrap();
+        let outcome = engine.process(page());
+
+        assert_eq!(outcome.report.status, InputStatus::Clean);
+        assert!(outcome.report.actions.is_empty());
+    }
+
+    #[test]
     fn a_page_with_no_references_reports_an_empty_section() {
         let fetcher = RecordingFetcher::new(b"body{}", Some("text/css"));
         let mut policy = Policy::builtin();
@@ -806,6 +843,48 @@ mod tests {
                 .unwrap()
                 .contains("ssrf.link_local")
         );
+    }
+
+    #[test]
+    fn a_response_over_the_cap_lands_on_the_budget_status() {
+        struct HugeFetcher;
+        impl crate::fetch::Fetcher for HugeFetcher {
+            fn fetch(
+                &self,
+                _url: &Url,
+                _policy: &crate::policy::FetchPolicy,
+                _ctx: FetchContext,
+            ) -> Result<crate::fetch::Fetched, crate::fetch::FetchError> {
+                Err(crate::fetch::FetchError::BodyTooLarge { cap: 1024 })
+            }
+        }
+        let engine = Engine::new(Policy::builtin(), Arc::new(HugeFetcher)).unwrap();
+        let outcome = engine.process(InputSource::Url(Url::parse("http://huge.test/").unwrap()));
+
+        assert_eq!(outcome.report.status, InputStatus::BudgetExceeded);
+        assert!(outcome.report.error.as_deref().unwrap().contains("1024"));
+        assert!(outcome.sanitized.is_none());
+    }
+
+    #[test]
+    fn an_oversized_response_counts_as_refused_and_sets_the_exit_code() {
+        struct HugeFetcher;
+        impl crate::fetch::Fetcher for HugeFetcher {
+            fn fetch(
+                &self,
+                _url: &Url,
+                _policy: &crate::policy::FetchPolicy,
+                _ctx: FetchContext,
+            ) -> Result<crate::fetch::Fetched, crate::fetch::FetchError> {
+                Err(crate::fetch::FetchError::BodyTooLarge { cap: 1024 })
+            }
+        }
+        let engine = Engine::new(Policy::builtin(), Arc::new(HugeFetcher)).unwrap();
+        let report = engine.process_batch(vec![url_input()], 1, |_, _| {});
+
+        assert_eq!(report.run.inputs_refused, 1);
+        assert_eq!(report.run.inputs_errored, 0);
+        assert_eq!(report.exit_code(), 1);
     }
 
     #[test]

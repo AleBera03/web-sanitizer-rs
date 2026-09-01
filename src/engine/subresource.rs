@@ -27,7 +27,10 @@ use crate::fetch::guard::FetchContext;
 use crate::fetch::{FetchError, Fetcher};
 use crate::html::Reference;
 use crate::policy::{Action, FetchPolicy, Policy, SniffAction, SubresourceType};
-use crate::report::{GuardBlock, InputStatus, SanitisationAction, SubresourceReport};
+use crate::report::{
+    GuardBlock, InputStatus, MAX_FRAGMENT_BYTES, SanitisationAction, SubresourceReport,
+    truncate_fragment,
+};
 use crate::sniff::{MimeType, SniffOutcome, mime_from_content_type, sniff_bytes};
 use crate::urlcheck::{Label, UrlChecker, Verdict};
 
@@ -53,6 +56,7 @@ pub struct SubresourceOutcome {
     pub assets: Vec<Asset>,
     /// Reference string to local path, for the parent's second pass.
     pub rewrites: HashMap<String, String>,
+    pub actions: Vec<SanitisationAction>,
 }
 
 /// What the joint budget has already been spent on.
@@ -122,6 +126,9 @@ impl<'a> SubresourceLoop<'a> {
             let slot = outcome.reports.len();
             let (report, asset) = self.handle(&url, reference, slot, &mut spent);
             if let Some(local) = self.rewrite_target(&report, asset.as_ref()) {
+                if let Some(action) = defanged_action(reference, report.status, &local) {
+                    outcome.actions.push(action);
+                }
                 outcome.rewrites.insert(reference.raw.clone(), local);
             }
             outcome.reports.push(report);
@@ -287,11 +294,7 @@ impl<'a> SubresourceLoop<'a> {
         if let Some(asset) = asset {
             return Some(asset.path.clone());
         }
-        let refused = matches!(
-            report.status,
-            InputStatus::Refused | InputStatus::BudgetExceeded | InputStatus::SsrfBlocked
-        );
-        if refused && rules.action_refused != Action::Allow {
+        if refusal_rule(report.status).is_some() && rules.action_refused != Action::Allow {
             return Some(self.urls.rules().placeholder_url.clone());
         }
         None
@@ -444,6 +447,34 @@ fn mime_mismatch(declared: Option<&str>, sniffed: Option<MimeType>) -> Option<Sa
         ),
         action: Action::Rewrite,
         replacement: None,
+    })
+}
+
+fn refusal_rule(status: InputStatus) -> Option<(&'static str, &'static str)> {
+    match status {
+        InputStatus::Refused => Some(("subresource.refused", "subresource")),
+        InputStatus::BudgetExceeded => Some(("subresource.budget_exceeded", "dos")),
+        InputStatus::SsrfBlocked => Some(("subresource.ssrf_blocked", CATEGORY_SSRF)),
+        _ => None,
+    }
+}
+
+fn defanged_action(
+    reference: &Reference,
+    status: InputStatus,
+    target: &str,
+) -> Option<SanitisationAction> {
+    let (rule_id, category) = refusal_rule(status)?;
+    Some(SanitisationAction {
+        rule_id: rule_id.to_string(),
+        category: category.to_string(),
+        location: crate::report::Location {
+            line: 0,
+            byte_offset: 0,
+        },
+        original: truncate_fragment(&reference.raw, MAX_FRAGMENT_BYTES),
+        action: Action::Rewrite,
+        replacement: Some(target.to_string()),
     })
 }
 
@@ -923,6 +954,59 @@ mod tests {
         );
         let outcome = run(&policy_fetching(), &fetcher, &[css("/a.css")]);
         assert!(outcome.rewrites.is_empty());
+        assert!(outcome.actions.is_empty());
+    }
+
+    #[test]
+    fn a_defanged_reference_is_an_action_the_parent_can_report() {
+        let fetcher = StubFetcher::new().body("http://parent.test/a.css", HTML, Some("text/css"));
+        let outcome = run(&policy_fetching(), &fetcher, &[css("/a.css")]);
+
+        assert_eq!(outcome.actions.len(), 1);
+        let action = &outcome.actions[0];
+        assert_eq!(action.rule_id, "subresource.refused");
+        assert_eq!(action.category, "subresource");
+        assert_eq!(action.original, "/a.css");
+        assert_eq!(action.replacement.as_deref(), Some("#blocked"));
+        assert_eq!(action.action, Action::Rewrite);
+    }
+
+    #[test]
+    fn a_reference_over_the_request_budget_names_the_budget() {
+        let mut policy = policy_fetching();
+        policy.subresources.max_requests = 1;
+        let fetcher = StubFetcher::new().otherwise(b"body{}", Some("text/css"));
+        let outcome = run(
+            &policy,
+            &fetcher,
+            &[css("/a.css"), css("/b.css"), css("/c.css")],
+        );
+
+        assert_eq!(outcome.actions.len(), 2);
+        for action in &outcome.actions {
+            assert_eq!(action.rule_id, "subresource.budget_exceeded");
+            assert_eq!(action.category, "dos");
+            assert_eq!(action.replacement.as_deref(), Some("#blocked"));
+        }
+    }
+
+    #[test]
+    fn a_fetched_reference_is_packaging_and_earns_no_action() {
+        let fetcher =
+            StubFetcher::new().body("http://parent.test/a.css", b"body{}", Some("text/css"));
+        let outcome = run(&policy_fetching(), &fetcher, &[css("/a.css")]);
+        assert_eq!(outcome.assets.len(), 1);
+        assert!(outcome.actions.is_empty());
+    }
+
+    #[test]
+    fn leaving_a_refused_reference_alone_records_nothing() {
+        let mut policy = policy_fetching();
+        policy.subresources.action_refused = Action::Allow;
+        let fetcher = StubFetcher::new().body("http://parent.test/a.css", HTML, Some("text/css"));
+        let outcome = run(&policy, &fetcher, &[css("/a.css")]);
+        assert!(outcome.rewrites.is_empty());
+        assert!(outcome.actions.is_empty());
     }
 
     #[test]

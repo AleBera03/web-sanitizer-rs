@@ -128,10 +128,8 @@ fn declares_json(headers: &HeaderMap) -> bool {
 
 fn http_status(status: InputStatus) -> StatusCode {
     match status {
-        InputStatus::Sanitised
-        | InputStatus::Clean
-        | InputStatus::Refused
-        | InputStatus::BudgetExceeded => StatusCode::OK,
+        InputStatus::Sanitised | InputStatus::Clean | InputStatus::Refused => StatusCode::OK,
+        InputStatus::BudgetExceeded => StatusCode::PAYLOAD_TOO_LARGE,
         InputStatus::SsrfBlocked => StatusCode::FORBIDDEN,
         InputStatus::FetchError => StatusCode::BAD_GATEWAY,
         InputStatus::UnsupportedScheme | InputStatus::MalformedUrl => StatusCode::BAD_REQUEST,
@@ -493,10 +491,53 @@ mod tests {
         assert_eq!(body["error"], "fetch_error");
     }
 
+    #[tokio::test]
+    async fn an_upstream_body_over_the_cap_answers_413() {
+        let engine = engine_with(Arc::new(StubFetcher(|_| {
+            Err(FetchError::BodyTooLarge {
+                cap: 10 * 1024 * 1024,
+            })
+        })));
+        let (status, body) = submitted(
+            engine,
+            Some("application/json"),
+            br#"{"url":"http://huge.test/"}"#,
+        )
+        .await;
+
+        assert_eq!(status, StatusCode::PAYLOAD_TOO_LARGE);
+        assert_eq!(body["report"]["status"], "budget_exceeded");
+        assert_eq!(body["error"], "budget_exceeded");
+        assert!(
+            body["report"]["error"]
+                .as_str()
+                .unwrap()
+                .contains("10485760")
+        );
+        assert!(body["content"].is_null());
+    }
+
+    #[tokio::test]
+    async fn a_timeout_is_still_the_upstreams_fault() {
+        let engine = engine_with(Arc::new(StubFetcher(|_| {
+            Err(FetchError::Timeout {
+                phase: TimeoutPhase::Read,
+            })
+        })));
+        let (status, _) = submitted(
+            engine,
+            Some("application/json"),
+            br#"{"url":"http://slow.test/"}"#,
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_GATEWAY);
+    }
+
     #[test]
     fn every_status_that_produced_no_output_carries_an_error_code() {
         for status in [
             InputStatus::SsrfBlocked,
+            InputStatus::BudgetExceeded,
             InputStatus::FetchError,
             InputStatus::UnsupportedScheme,
             InputStatus::MalformedUrl,
@@ -504,13 +545,13 @@ mod tests {
             InputStatus::InternalError,
             InputStatus::SkippedSymlink,
         ] {
-            assert!(http_status(status).is_client_error() || http_status(status).is_server_error());
+            let code = http_status(status);
+            assert!(code.is_client_error() || code.is_server_error());
         }
         for status in [
             InputStatus::Clean,
             InputStatus::Sanitised,
             InputStatus::Refused,
-            InputStatus::BudgetExceeded,
         ] {
             assert_eq!(http_status(status), StatusCode::OK);
         }

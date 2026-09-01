@@ -9,7 +9,6 @@
 
 pub mod cache;
 pub mod resolver;
-
 use std::cell::Cell;
 use std::fmt;
 use std::io;
