@@ -246,9 +246,7 @@ pub enum DosDetectedAction {
     Truncate,
 }
 
-/// Kinds of reference the sub-resource loop is allowed to fetch. The set is
-/// matched against the *sniffed* type of the body, never against the reference
-/// that produced it.
+/// Kinds of reference the sub-resource loop is allowed to fetch.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum SubresourceType {

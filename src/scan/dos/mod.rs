@@ -12,14 +12,14 @@ pub fn scan_dos_risks(
     input: &SniffOutcome,
     rules: &SubresourcesRules,
 ) -> Option<SanitisationAction> {
-    let data = input.output.as_deref().unwrap_or_default();
+    let data = input.data.as_slice();
 
-    let (rule_id, offset) = match input.mime_type {
+    let (rule_id, offset) = match input.mime_type() {
         Some(MimeType::ApplicationXml) => {
-            xml_has_dos_risk(&data, &rules.xml_budget).map(|o| ("scan.xml.entity_expansion", o))?
+            xml_has_dos_risk(data, &rules.xml_budget).map(|o| ("scan.xml.entity_expansion", o))?
         }
         Some(MimeType::ApplicationZip) => {
-            zip_has_dos_risk(&data, &rules.zip_budget).map(|o| ("scan.zip.bomb_risk", o))?
+            zip_has_dos_risk(data, &rules.zip_budget).map(|o| ("scan.zip.bomb_risk", o))?
         }
         _ => return None,
     };
@@ -46,13 +46,16 @@ pub fn scan_dos_risks(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::sniff::MimeVerdict;
 
     fn sniff_outcome(mime: MimeType, data: &[u8]) -> SniffOutcome {
         SniffOutcome {
-            output: Some(data.to_vec()),
-            mime_type: Some(mime),
+            data: data.to_vec(),
+            verdict: MimeVerdict {
+                declared: None,
+                sniffed: Some(mime),
+            },
             actions: Vec::new(),
-            refused: false,
         }
     }
 
@@ -95,13 +98,8 @@ mod tests {
     }
 
     #[test]
-    fn missing_output_is_treated_as_empty_data() {
-        let outcome = SniffOutcome {
-            output: None,
-            mime_type: Some(MimeType::ApplicationXml),
-            actions: Vec::new(),
-            refused: false,
-        };
+    fn empty_data_carries_no_risk() {
+        let outcome = sniff_outcome(MimeType::ApplicationXml, b"");
         assert!(scan_dos_risks(&outcome, &rules()).is_none());
     }
 }

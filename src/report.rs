@@ -50,6 +50,12 @@ pub struct InputReport {
     pub bytes_in: u64,
     pub bytes_out: u64,
     pub duration_ms: u64,
+    /// `Content-Type` the server sent, `None` for local inputs.
+    #[serde(default)]
+    pub declared_mime: Option<String>,
+    /// Type proven by the leading bytes, `None` when no signature matched.
+    #[serde(default)]
+    pub sniffed_mime: Option<String>,
     pub actions: Vec<SanitisationAction>,
     /// Human-readable cause for error statuses.
     #[serde(skip_serializing_if = "Option::is_none", default)]
@@ -256,6 +262,8 @@ mod tests {
             bytes_in: 10,
             bytes_out: 10,
             duration_ms: 1,
+            declared_mime: None,
+            sniffed_mime: None,
             actions: Vec::new(),
             error: None,
             subresources: None,

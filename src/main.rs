@@ -111,6 +111,8 @@ fn run(args: &args::Args, scan_args: &ScanArgs, policy: Policy) -> Result<u8, Bo
             bytes_in: 0,
             bytes_out: 0,
             duration_ms: 0,
+            declared_mime: None,
+            sniffed_mime: None,
             actions: Vec::new(),
             error: Some("symlink resolves outside the tree root".to_string()),
             subresources: None,

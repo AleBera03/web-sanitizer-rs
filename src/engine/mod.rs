@@ -58,6 +58,7 @@ pub mod route;
 pub mod subresource;
 
 use std::fs;
+use std::mem;
 use std::net::SocketAddr;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::Arc;
@@ -119,7 +120,7 @@ struct Acquired {
     data: Vec<u8>,
     url: Option<Url>,
     endpoint: Option<SocketAddr>,
-    content_type: Option<String>,
+    declared_mime: Option<String>,
 }
 
 impl Engine {
@@ -235,7 +236,7 @@ impl Engine {
             data,
             url,
             endpoint,
-            content_type,
+            declared_mime,
         } = acquired;
         // one checker per input: the pipeline and the sub-resource loop share it
         let checker = UrlChecker::new(
@@ -245,13 +246,13 @@ impl Engine {
             &self.verdictcache,
             &self.policy.urls,
         );
-        let sniff_outcome = sniff_input(
-            AcquiredInput::new(input, data, content_type),
+        let mut sniff_outcome = sniff_input(
+            AcquiredInput::new(input, data).declaring(declared_mime.clone()),
             &self.policy.subresources,
             0,
         );
-        let sniff_actions = sniff_outcome.actions.clone();
-        let sniff_refused = sniff_outcome.refused;
+        let sniffed_mime = sniff_outcome.verdict.sniffed.map(|m| m.label().to_string());
+        let sniff_actions = mem::take(&mut sniff_outcome.actions);
         let routed = route::route(sniff_outcome, &self.policy, &checker, 0);
 
         // sub-resources, only for a document that survived and only when asked
@@ -272,7 +273,7 @@ impl Engine {
             None => (routed.output, Vec::new(), None),
         };
 
-        let refused = sniff_refused || routed.refused;
+        let refused = routed.refused;
         let status = if refused {
             InputStatus::Refused
         } else if actions.is_empty() {
@@ -280,8 +281,7 @@ impl Engine {
         } else {
             InputStatus::Sanitised
         };
-        // a refused input produces a report and nothing else: handing bytes
-        // back would let the front-ends write an output file for it
+        // a refused input produces only a report
         let sanitized = if refused { None } else { Some(output) };
         Outcome {
             report: InputReport {
@@ -291,6 +291,8 @@ impl Engine {
                 bytes_in,
                 bytes_out: sanitized.as_ref().map_or(0, |out| out.len() as u64),
                 duration_ms: 0,
+                declared_mime,
+                sniffed_mime,
                 actions,
                 error: None,
                 subresources: reports,
@@ -338,7 +340,7 @@ impl Engine {
                 data: data.clone(),
                 url: None,
                 endpoint: None,
-                content_type: None,
+                declared_mime: None,
             }),
             InputSource::File(path) => {
                 // Size check via metadata first: a file over budget is refused
@@ -356,7 +358,7 @@ impl Engine {
                     data,
                     url: None,
                     endpoint: None,
-                    content_type: None,
+                    declared_mime: None,
                 })
             }
             InputSource::Url(url) => {
@@ -375,7 +377,7 @@ impl Engine {
                     data: fetched.body,
                     url: Some(fetched.final_url),
                     endpoint: fetched.endpoint,
-                    content_type: fetched.declared_mime,
+                    declared_mime: fetched.declared_mime,
                 })
             }
             InputSource::MalformedUrl(s) => Err((
@@ -418,6 +420,8 @@ fn error_report(source: String, status: InputStatus, cause: String) -> InputRepo
         bytes_in: 0,
         bytes_out: 0,
         duration_ms: 0,
+        declared_mime: None,
+        sniffed_mime: None,
         actions: Vec::new(),
         error: Some(cause),
         subresources: None,
@@ -472,16 +476,36 @@ mod tests {
 
     #[test]
     fn a_refused_input_keeps_its_report_and_loses_its_bytes() {
-        // a declared jpeg that is really a png: the sniff mismatch refuses it,
-        // and no output must reach the front-ends
+        // a script file is refused by its type, and no output must reach the front-ends
         let outcome = engine().process(InputSource::Bytes {
-            name: "fake.jpg".to_string(),
-            data: vec![0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A],
+            name: "app.js".to_string(),
+            data: b"alert(1)".to_vec(),
         });
         assert_eq!(outcome.report.status, InputStatus::Refused);
         assert!(outcome.sanitized.is_none());
         assert_eq!(outcome.report.bytes_out, 0);
-        assert!(!outcome.report.actions.is_empty());
+        assert_eq!(outcome.report.actions[0].rule_id, "scan.script.active_type");
+    }
+
+    #[test]
+    fn a_contradicted_declaration_is_recorded_without_refusing() {
+        // a declared jpeg that is really a png: the bytes decide, the lie is on record
+        let png = vec![0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A];
+        let outcome = engine().process(InputSource::Bytes {
+            name: "fake.jpg".to_string(),
+            data: png.clone(),
+        });
+        assert_eq!(outcome.report.status, InputStatus::Sanitised);
+        assert_eq!(outcome.sanitized, Some(png));
+        assert_eq!(outcome.report.actions[0].rule_id, "sniff.mime_mismatch");
+        assert_eq!(outcome.report.sniffed_mime.as_deref(), Some("image/png"));
+    }
+
+    #[test]
+    fn a_local_input_declares_nothing() {
+        let outcome = engine().process(bytes(b"payload"));
+        assert_eq!(outcome.report.declared_mime, None);
+        assert_eq!(outcome.report.sniffed_mime, None);
     }
 
     #[test]
@@ -656,6 +680,89 @@ mod tests {
 
     fn url_input() -> InputSource {
         InputSource::Url(Url::parse("http://site.test/page.html").unwrap())
+    }
+
+    fn served(path: &str) -> InputSource {
+        InputSource::Url(Url::parse(&format!("http://site.test/{path}")).unwrap())
+    }
+
+    // the declared type, seen from the pipeline
+
+    #[test]
+    fn a_declared_script_is_refused_end_to_end() {
+        let fetcher = RecordingFetcher::new(
+            b"This is just plain text, not JavaScript code.",
+            Some("text/javascript"),
+        );
+        let engine = Engine::new(Policy::builtin(), fetcher).unwrap();
+        let outcome = engine.process(served("bundle"));
+
+        assert_eq!(outcome.report.status, InputStatus::Refused);
+        assert!(outcome.sanitized.is_none());
+        assert_eq!(outcome.report.bytes_out, 0);
+        assert_eq!(
+            outcome.report.declared_mime.as_deref(),
+            Some("text/javascript")
+        );
+        assert_eq!(outcome.report.sniffed_mime, None);
+        assert_eq!(outcome.report.actions[0].rule_id, "scan.script.active_type");
+    }
+
+    #[test]
+    fn a_generic_declaration_does_not_hide_the_sniffed_type() {
+        let png = [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A];
+        let fetcher = RecordingFetcher::new(&png, Some("application/octet-stream"));
+        let engine = Engine::new(Policy::builtin(), fetcher).unwrap();
+        let outcome = engine.process(served("pic"));
+
+        assert_eq!(outcome.report.status, InputStatus::Clean);
+        assert_eq!(
+            outcome.report.declared_mime.as_deref(),
+            Some("application/octet-stream")
+        );
+        assert_eq!(outcome.report.sniffed_mime.as_deref(), Some("image/png"));
+    }
+
+    #[test]
+    fn an_unrecognised_body_reports_no_sniffed_type() {
+        let fetcher =
+            RecordingFetcher::new(b"ZZZZ-not-a-known-magic", Some("application/octet-stream"));
+        let engine = Engine::new(Policy::builtin(), fetcher).unwrap();
+        let outcome = engine.process(served("blob"));
+
+        assert_eq!(outcome.report.status, InputStatus::Clean);
+        assert_eq!(outcome.report.sniffed_mime, None);
+    }
+
+    #[test]
+    fn html_declared_as_an_image_is_sanitised_as_html() {
+        let body = b"<!doctype html><html><body><script>alert('xss')</script></body></html>";
+        let fetcher = RecordingFetcher::new(body, Some("image/png"));
+        let engine = Engine::new(Policy::builtin(), fetcher).unwrap();
+        let outcome = engine.process(served("pic"));
+
+        assert_eq!(outcome.report.status, InputStatus::Sanitised);
+        let rules: Vec<&str> = outcome
+            .report
+            .actions
+            .iter()
+            .map(|a| a.rule_id.as_str())
+            .collect();
+        assert!(rules.contains(&"sniff.mime_mismatch"));
+        assert!(rules.contains(&"html.script.disallowed"));
+        assert!(!String::from_utf8_lossy(outcome.sanitized.as_deref().unwrap()).contains("alert"));
+    }
+
+    #[test]
+    fn html_without_a_doctype_is_sanitised_when_declared() {
+        let body = b"<html><body><script>alert(1)</script></body></html>";
+        let fetcher = RecordingFetcher::new(body, Some("text/html; charset=utf-8"));
+        let engine = Engine::new(Policy::builtin(), fetcher).unwrap();
+        let outcome = engine.process(served("page"));
+
+        assert_eq!(outcome.report.status, InputStatus::Sanitised);
+        assert_eq!(outcome.report.sniffed_mime, None);
+        assert!(!String::from_utf8_lossy(outcome.sanitized.as_deref().unwrap()).contains("alert"));
     }
 
     #[test]

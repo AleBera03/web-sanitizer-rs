@@ -26,12 +26,13 @@ use url::Url;
 use crate::fetch::guard::FetchContext;
 use crate::fetch::{FetchError, Fetcher};
 use crate::html::Reference;
+use crate::input::InputSource;
 use crate::policy::{Action, FetchPolicy, Policy, SniffAction, SubresourceType};
 use crate::report::{
     GuardBlock, InputStatus, MAX_FRAGMENT_BYTES, SanitisationAction, SubresourceReport,
     truncate_fragment,
 };
-use crate::sniff::{MimeType, SniffOutcome, mime_from_content_type, sniff_bytes};
+use crate::sniff::{AcquiredInput, MimeType, sniff_input};
 use crate::urlcheck::{Label, UrlChecker, Verdict};
 
 use super::route::route;
@@ -182,44 +183,54 @@ impl<'a> SubresourceLoop<'a> {
             Ok(fetched) => fetched,
             Err(error) => return (self.fetch_failed(url, start, error), None),
         };
-        spent.bytes += fetched.body.len() as u64;
+        let bytes_in = fetched.body.len() as u64;
+        spent.bytes += bytes_in;
 
-        let declared = fetched.declared_mime.clone();
-        let sniffed = sniff_bytes(&fetched.body);
         let mut report = SubresourceReport {
             final_url: Some(fetched.final_url.to_string()),
-            declared_mime: declared.clone(),
-            sniffed_mime: sniffed.map(|m| m.label().to_string()),
-            bytes_in: fetched.body.len() as u64,
+            declared_mime: fetched.declared_mime.clone(),
+            bytes_in,
             ..self.entry(url, InputStatus::Clean, start)
         };
 
         // per-sub-resource budgets apply to each body individually
-        if fetched.body.len() as u64 > self.policy.budgets.max_input_bytes {
+        if bytes_in > self.policy.budgets.max_input_bytes {
             report.status = InputStatus::BudgetExceeded;
             report.error = Some("body exceeds max_input_bytes".to_string());
             report.duration_ms = elapsed_ms(start);
             return (report, None);
         }
 
-        // the sniffed type wins over the declaration
-        let mut actions = Vec::new();
-        if let Some(mismatch) = mime_mismatch(declared.as_deref(), sniffed) {
-            actions.push(mismatch);
-            if rules.sniff_rule == SniffAction::Reject {
-                report.status = InputStatus::Refused;
-                report.error = Some("declared and sniffed types disagree".to_string());
-                report.actions = actions;
-                report.duration_ms = elapsed_ms(start);
-                return (report, None);
+        // the same sniffer the parent went through, fed the same sources
+        let mut sniffed = sniff_input(
+            AcquiredInput::new(InputSource::Url(fetched.final_url), fetched.body)
+                .declaring(fetched.declared_mime),
+            rules,
+            0,
+        );
+        if sniffed.verdict.declared.is_none() {
+            sniffed.verdict.declared = claimed_type(reference.kind);
+        }
+        report.sniffed_mime = sniffed.verdict.sniffed.map(|m| m.label().to_string());
+        let mut actions = std::mem::take(&mut sniffed.actions);
+
+        if sniffed.verdict.contradicted() && rules.sniff_rule == SniffAction::Reject {
+            for action in &mut actions {
+                action.action = Action::Refuse;
             }
+            report.status = InputStatus::Refused;
+            report.error = Some("declared and sniffed types disagree".to_string());
+            report.actions = actions;
+            report.duration_ms = elapsed_ms(start);
+            return (report, None);
         }
 
-        let Some(kind) = effective_type(sniffed, reference.kind) else {
+        let effective = sniffed.mime_type();
+        let Some(kind) = subresource_kind(effective, reference.kind) else {
             report.status = InputStatus::Refused;
             report.error = Some(format!(
-                "sniffed type {} is not a fetchable sub-resource",
-                report.sniffed_mime.as_deref().unwrap_or("unknown")
+                "type {} is not a fetchable sub-resource",
+                effective.map_or("unknown", MimeType::label)
             ));
             report.actions = actions;
             report.duration_ms = elapsed_ms(start);
@@ -235,17 +246,7 @@ impl<'a> SubresourceLoop<'a> {
 
         // re-entry into the pipeline at depth 1. Its own references, if it has
         // any, are inspected by the HTML pass and never fetched
-        let routed = route(
-            SniffOutcome {
-                output: Some(fetched.body),
-                mime_type: sniffed,
-                actions: Vec::new(),
-                refused: false,
-            },
-            self.policy,
-            self.urls,
-            SUBRESOURCE_DEPTH,
-        );
+        let routed = route(sniffed, self.policy, self.urls, SUBRESOURCE_DEPTH);
         actions.extend(routed.actions);
 
         report.status = if routed.refused {
@@ -267,7 +268,7 @@ impl<'a> SubresourceLoop<'a> {
             path: format!(
                 "{}/asset-{slot}.{}",
                 self.asset_dir,
-                extension(sniffed, kind)
+                extension(effective, kind)
             ),
             bytes: routed.output,
         };
@@ -389,18 +390,28 @@ fn url_refusal(verdict: Verdict) -> Option<&'static str> {
     }
 }
 
-fn effective_type(sniffed: Option<MimeType>, claimed: SubresourceType) -> Option<SubresourceType> {
-    match sniffed {
+fn claimed_type(kind: SubresourceType) -> Option<MimeType> {
+    match kind {
+        SubresourceType::Css => Some(MimeType::TextCss),
+        SubresourceType::Js => Some(MimeType::TextJavascript),
+        SubresourceType::Image => None,
+    }
+}
+
+fn subresource_kind(
+    effective: Option<MimeType>,
+    claimed: SubresourceType,
+) -> Option<SubresourceType> {
+    match effective {
         None => Some(claimed),
         Some(mime) => subresource_type(mime),
     }
 }
 
-/// The policy category a sniffed body falls into, or `None` when the type is
-/// one no sub-resource may ever be. This is a decision of the loop, so it
-/// lives here and never in the sniffer.
 fn subresource_type(mime: MimeType) -> Option<SubresourceType> {
     match mime {
+        MimeType::TextCss => Some(SubresourceType::Css),
+        MimeType::TextJavascript => Some(SubresourceType::Js),
         MimeType::ImageJpeg
         | MimeType::ImagePng
         | MimeType::ImageGif
@@ -411,11 +422,8 @@ fn subresource_type(mime: MimeType) -> Option<SubresourceType> {
     }
 }
 
-/// Extension of the sanitised copy: from the sniffed type when there is one,
-/// otherwise from the class of the reference. Never from the URL, so a
-/// reference to `../../etc/passwd` cannot influence an output path.
-fn extension(sniffed: Option<MimeType>, kind: SubresourceType) -> &'static str {
-    match sniffed {
+fn extension(effective: Option<MimeType>, kind: SubresourceType) -> &'static str {
+    match effective {
         Some(mime) => mime.extension(),
         None => match kind {
             SubresourceType::Css => "css",
@@ -423,31 +431,6 @@ fn extension(sniffed: Option<MimeType>, kind: SubresourceType) -> &'static str {
             SubresourceType::Image => "bin",
         },
     }
-}
-
-/// The mismatch action, when a declared `Content-Type` we understand disagrees
-/// with the sniffed type. A declaration we do not know is not a disagreement.
-fn mime_mismatch(declared: Option<&str>, sniffed: Option<MimeType>) -> Option<SanitisationAction> {
-    let declared_mime = mime_from_content_type(declared?)?;
-    let sniffed = sniffed?;
-    if declared_mime == sniffed {
-        return None;
-    }
-    Some(SanitisationAction {
-        rule_id: "sniff.mime_mismatch".to_string(),
-        category: "sniff".to_string(),
-        location: crate::report::Location {
-            line: 0,
-            byte_offset: 0,
-        },
-        original: format!(
-            "declared={} sniffed={}",
-            declared_mime.label(),
-            sniffed.label()
-        ),
-        action: Action::Rewrite,
-        replacement: None,
-    })
 }
 
 fn refusal_rule(status: InputStatus) -> Option<(&'static str, &'static str)> {
@@ -590,6 +573,13 @@ mod tests {
         Reference {
             raw: raw.to_string(),
             kind: SubresourceType::Image,
+        }
+    }
+
+    fn js(raw: &str) -> Reference {
+        Reference {
+            raw: raw.to_string(),
+            kind: SubresourceType::Js,
         }
     }
 
@@ -813,13 +803,109 @@ mod tests {
 
     #[test]
     fn a_stylesheet_that_is_really_html_is_refused() {
-        // the sniffed type decides, and HTML is not in the set
+        // the bytes contradict the declaration, and a sub-resource gets no tolerance for that
         let fetcher = StubFetcher::new().body("http://parent.test/a.css", HTML, Some("text/css"));
         let outcome = run(&policy_fetching(), &fetcher, &[css("/a.css")]);
         let entry = &outcome.reports[0];
         assert_eq!(entry.status, InputStatus::Refused);
         assert_eq!(entry.sniffed_mime.as_deref(), Some("text/html"));
         assert_eq!(entry.declared_mime.as_deref(), Some("text/css"));
+        assert_eq!(entry.actions[0].rule_id, "sniff.mime_mismatch");
+        assert_eq!(entry.actions[0].action, Action::Refuse);
+        assert!(entry.error.as_deref().unwrap().contains("disagree"));
+    }
+
+    #[test]
+    fn html_served_without_any_declaration_is_not_a_fetchable_kind() {
+        // nothing to contradict, but HTML is a type no sub-resource may be
+        let fetcher = StubFetcher::new().body("http://parent.test/page2", HTML, None);
+        let outcome = run(&policy_fetching(), &fetcher, &[image("/page2")]);
+        let entry = &outcome.reports[0];
+        assert_eq!(entry.status, InputStatus::Refused);
+        assert!(entry.actions.is_empty());
+        assert!(entry.error.as_deref().unwrap().contains("text/html"));
+    }
+
+    #[test]
+    fn a_script_sub_resource_is_refused_by_its_type() {
+        let fetcher = StubFetcher::new().body(
+            "http://parent.test/app.js",
+            b"alert(1)",
+            Some("application/javascript"),
+        );
+        let outcome = run(&policy_fetching(), &fetcher, &[js("/app.js")]);
+        let entry = &outcome.reports[0];
+        assert_eq!(entry.status, InputStatus::Refused);
+        assert_eq!(entry.sniffed_mime, None);
+        assert_eq!(entry.actions[0].rule_id, "scan.script.active_type");
+        assert!(outcome.assets.is_empty());
+        assert_eq!(
+            outcome.rewrites.get("/app.js").map(String::as_str),
+            Some("#blocked")
+        );
+    }
+
+    #[test]
+    fn a_script_claimed_by_the_parent_alone_is_still_a_script() {
+        // no header, no extension: the referencing element is the only claim left
+        let fetcher = StubFetcher::new().body("http://parent.test/bundle", b"alert(1)", None);
+        let outcome = run(&policy_fetching(), &fetcher, &[js("/bundle")]);
+        assert_eq!(outcome.reports[0].status, InputStatus::Refused);
+        assert_eq!(
+            outcome.reports[0].actions[0].rule_id,
+            "scan.script.active_type"
+        );
+    }
+
+    #[test]
+    fn a_script_is_kept_when_active_content_is_allowed() {
+        let mut policy = policy_fetching();
+        policy.subresources.active_content_rule = crate::policy::ActiveContentAction::Allow;
+        let fetcher = StubFetcher::new().body(
+            "http://parent.test/app.js",
+            b"alert(1)",
+            Some("text/javascript"),
+        );
+        let outcome = run(&policy, &fetcher, &[js("/app.js")]);
+        assert_eq!(outcome.reports[0].status, InputStatus::Sanitised);
+        assert_eq!(outcome.assets[0].path, "0-page.html.assets/asset-0.js");
+        assert_eq!(outcome.assets[0].bytes, b"alert(1)");
+    }
+
+    #[test]
+    fn the_header_outranks_the_referencing_element() {
+        // a <link rel=stylesheet> pointing at a script gets the script treatment
+        let fetcher = StubFetcher::new().body(
+            "http://parent.test/style",
+            b"alert(1)",
+            Some("text/javascript"),
+        );
+        let outcome = run(&policy_fetching(), &fetcher, &[css("/style")]);
+        assert_eq!(outcome.reports[0].status, InputStatus::Refused);
+        assert_eq!(
+            outcome.reports[0].actions[0].rule_id,
+            "scan.script.active_type"
+        );
+    }
+
+    #[test]
+    fn the_path_outranks_the_referencing_element() {
+        let fetcher = StubFetcher::new().body("http://parent.test/app.js", b"alert(1)", None);
+        let outcome = run(&policy_fetching(), &fetcher, &[css("/app.js")]);
+        assert_eq!(outcome.reports[0].status, InputStatus::Refused);
+        assert_eq!(
+            outcome.reports[0].actions[0].rule_id,
+            "scan.script.active_type"
+        );
+    }
+
+    #[test]
+    fn an_image_element_claims_no_particular_type() {
+        // an unsniffable body behind <img> is stored as opaque bytes
+        let fetcher = StubFetcher::new().body("http://parent.test/pic", b"????", None);
+        let outcome = run(&policy_fetching(), &fetcher, &[image("/pic")]);
+        assert_eq!(outcome.reports[0].status, InputStatus::Clean);
+        assert_eq!(outcome.assets[0].path, "0-page.html.assets/asset-0.bin");
     }
 
     #[test]
@@ -852,13 +938,30 @@ mod tests {
     }
 
     #[test]
-    fn an_unknown_declaration_is_not_a_mismatch() {
-        // `text/css` names no magic-byte type, so it cannot contradict anything
+    fn an_unsniffable_body_cannot_contradict_its_declaration() {
+        // CSS has no magic number, so the declaration is all there is
         let fetcher =
             StubFetcher::new().body("http://parent.test/a.css", b"body{}", Some("text/css"));
         let outcome = run(&policy_fetching(), &fetcher, &[css("/a.css")]);
         assert_eq!(outcome.reports[0].status, InputStatus::Clean);
         assert!(outcome.reports[0].actions.is_empty());
+        assert_eq!(outcome.reports[0].sniffed_mime, None);
+    }
+
+    #[test]
+    fn a_generic_declaration_is_not_a_mismatch() {
+        let fetcher = StubFetcher::new().body(
+            "http://parent.test/a",
+            PNG,
+            Some("application/octet-stream"),
+        );
+        let outcome = run(&policy_fetching(), &fetcher, &[image("/a")]);
+        assert_eq!(outcome.reports[0].status, InputStatus::Clean);
+        assert_eq!(
+            outcome.reports[0].sniffed_mime.as_deref(),
+            Some("image/png")
+        );
+        assert_eq!(outcome.assets[0].path, "0-page.html.assets/asset-0.png");
     }
 
     #[test]
@@ -1010,13 +1113,37 @@ mod tests {
     }
 
     #[test]
-    fn only_images_are_a_fetchable_subresource_type() {
+    fn every_fetchable_kind_names_its_types() {
         assert_eq!(
             subresource_type(MimeType::ImagePng),
             Some(SubresourceType::Image)
         );
+        assert_eq!(
+            subresource_type(MimeType::TextCss),
+            Some(SubresourceType::Css)
+        );
+        assert_eq!(
+            subresource_type(MimeType::TextJavascript),
+            Some(SubresourceType::Js)
+        );
         assert_eq!(subresource_type(MimeType::TextHtml), None);
         assert_eq!(subresource_type(MimeType::ApplicationPdf), None);
+    }
+
+    #[test]
+    fn the_claim_of_a_reference_fills_only_an_empty_verdict() {
+        assert_eq!(
+            subresource_kind(None, SubresourceType::Js),
+            Some(SubresourceType::Js)
+        );
+        assert_eq!(
+            subresource_kind(Some(MimeType::ImagePng), SubresourceType::Js),
+            Some(SubresourceType::Image)
+        );
+        assert_eq!(
+            subresource_kind(Some(MimeType::TextHtml), SubresourceType::Css),
+            None
+        );
     }
 
     #[test]

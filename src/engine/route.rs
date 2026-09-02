@@ -57,10 +57,9 @@ pub fn route(
     url: &UrlChecker,
     _depth: u32, // TEMP: not yet used, but may be for budget policies
 ) -> RouteOutcome {
-    match sniff_outcome.mime_type {
+    match sniff_outcome.mime_type() {
         Some(MimeType::TextHtml) => {
-            let html_outcome =
-                html::sanitize_html(&sniff_outcome.output.unwrap_or_default(), &policy.html, url);
+            let html_outcome = html::sanitize_html(&sniff_outcome.data, &policy.html, url);
             RouteOutcome {
                 output: html_outcome.output,
                 actions: html_outcome.actions,
@@ -69,7 +68,9 @@ pub fn route(
                 base: html_outcome.base,
             }
         }
-        Some(MimeType::ApplicationPdf) | Some(MimeType::ImageTiff) => {
+        Some(MimeType::ApplicationPdf)
+        | Some(MimeType::ImageTiff)
+        | Some(MimeType::TextJavascript) => {
             scan_active_content(sniff_outcome, &policy.subresources).into()
         }
         Some(MimeType::ApplicationZip) => {
@@ -100,7 +101,7 @@ pub fn route(
 
         Some(MimeType::ImageSvg) => scan_active_content(sniff_outcome, &policy.subresources).into(),
 
-        _ => RouteOutcome::scanned(sniff_outcome.output.unwrap_or_default(), Vec::new(), false),
+        _ => RouteOutcome::scanned(sniff_outcome.data, Vec::new(), false),
     }
 }
 
@@ -108,13 +109,27 @@ pub fn route(
 mod tests {
     use super::*;
     use crate::html::tests_support::no_url_checker;
+    use crate::sniff::MimeVerdict;
 
     fn sniffed(mime: Option<MimeType>, data: &[u8]) -> SniffOutcome {
         SniffOutcome {
-            output: Some(data.to_vec()),
-            mime_type: mime,
+            data: data.to_vec(),
+            verdict: MimeVerdict {
+                declared: None,
+                sniffed: mime,
+            },
             actions: Vec::new(),
-            refused: false,
+        }
+    }
+
+    fn declared(mime: MimeType, data: &[u8]) -> SniffOutcome {
+        SniffOutcome {
+            data: data.to_vec(),
+            verdict: MimeVerdict {
+                declared: Some(mime),
+                sniffed: None,
+            },
+            actions: Vec::new(),
         }
     }
 
@@ -157,6 +172,46 @@ mod tests {
         assert!(outcome.references.is_empty());
         assert!(outcome.base.is_none());
         assert!(!outcome.refused);
+    }
+
+    #[test]
+    fn javascript_is_refused_and_carries_no_references() {
+        let outcome = route(
+            declared(MimeType::TextJavascript, b"plain text"),
+            &Policy::builtin(),
+            &no_url_checker(),
+            0,
+        );
+        assert!(outcome.refused);
+        assert!(outcome.output.is_empty());
+        assert!(outcome.references.is_empty());
+        assert_eq!(outcome.actions[0].rule_id, "scan.script.active_type");
+    }
+
+    #[test]
+    fn declared_html_without_a_doctype_is_sanitised() {
+        let outcome = route(
+            declared(
+                MimeType::TextHtml,
+                b"<html><script>alert(1)</script></html>",
+            ),
+            &Policy::builtin(),
+            &no_url_checker(),
+            0,
+        );
+        assert!(!String::from_utf8_lossy(&outcome.output).contains("alert"));
+    }
+
+    #[test]
+    fn a_stylesheet_passes_through_untouched() {
+        let outcome = route(
+            declared(MimeType::TextCss, b"body{}"),
+            &Policy::builtin(),
+            &no_url_checker(),
+            0,
+        );
+        assert!(!outcome.refused);
+        assert_eq!(outcome.output, b"body{}");
     }
 
     #[test]

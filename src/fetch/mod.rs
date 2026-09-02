@@ -13,11 +13,11 @@
 
 pub mod guard;
 
+use std::fmt;
 use std::io::{self, Read};
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
-use std::{eprintln, fmt};
 
 use thiserror::Error;
 use ureq::http::Response;
@@ -304,7 +304,7 @@ fn check_declared_length(response: &Response<Body>, cap: u64) -> Result<(), Fetc
 }
 
 fn check_content_encoding(response: &Response<Body>) -> Result<(), FetchError> {
-    match header(&response, CONTENT_ENCODING) {
+    match header(response, CONTENT_ENCODING) {
         Some(enc) if enc != "identity" => Err(FetchError::Transport(format!(
             "unsupported content encoding `{enc}`"
         ))),
