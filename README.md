@@ -21,30 +21,18 @@ just book-build     Build the book from mdbook and mdbook-pdf
 load-image          Load docker image from .tar file
 run-image           Run container
 serve               Run wsrs command with --serve option
-test                Sample test against an arbitrary scenario
+scenarios           Run python script that run all 28 scenarios
 ```
 
 ### Test a scenario
 
-> [!IMPORTANT]  
-> Before proceed, remember to unzip multipart compressed evil-origin within `scripts` by extracting `...part1.rar`.
+The `just scenarios` command run all 28 scenarios. If you want to see options type
 
-If you want to test a scenario run these commands:
-
-- on terminal (A) run
 ```
-just run-image
+just scenarios --help
 ```
 
-- then open a new terminal (B)
+For example, to save report in a json file
 ```
-just serve
+just scenarios --out /scenarios/out
 ```
-press Ctrl+C in order to stop server.
-
-- finally, run test
-```
-just test
-```
-
-By default, scenario in `test` is `http://localhost:3100/html/script-tag`.

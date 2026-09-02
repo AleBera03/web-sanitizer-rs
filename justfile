@@ -26,5 +26,5 @@ run-image:
     docker run -d -p 3100:3100 --name evil-origin evil-origin
 
 [group("test")]
-scenarios:
-    python3 scenarios/run_scenarios.py
+scenarios *ARGS:
+    python3 scenarios/run_scenarios.py {{ARGS}}

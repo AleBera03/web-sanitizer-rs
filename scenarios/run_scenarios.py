@@ -9,10 +9,6 @@ The script starts what is missing and then runs the corpus:
 
 Anything already running is reused and left alone.
 The spawned sanitizer is stopped again when the run ends.
-
-```
-python3 scenarios/run_scenarios.py
-```
 """
 
 import argparse
@@ -133,6 +129,12 @@ def just(recipe):
     return result.returncode == 0
 
 
+def prepared(path):
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    return path
+
+
 def docker_has_image():
     executable = shutil.which("docker")
     if executable is None:
@@ -151,7 +153,7 @@ def download_image_zip(url):
     partial = IMAGE_ZIP.with_suffix(".part")
     try:
         with urllib.request.urlopen(url, timeout=60) as response, \
-                open(partial, "wb") as handle:
+                open(prepared(partial), "wb") as handle:
             shutil.copyfileobj(response, handle)
     except (urllib.error.URLError, OSError) as error:
         partial.unlink(missing_ok=True)
@@ -174,7 +176,8 @@ def extract_image_tar(url):
     try:
         with zipfile.ZipFile(IMAGE_ZIP) as archive:
             # one named member, so no archive-controlled path is ever joined
-            with archive.open(IMAGE_MEMBER) as source, open(IMAGE_TAR, "wb") as target:
+            with archive.open(IMAGE_MEMBER) as source, \
+                    open(prepared(IMAGE_TAR), "wb") as target:
                 shutil.copyfileobj(source, target)
     except (zipfile.BadZipFile, KeyError, OSError) as error:
         IMAGE_TAR.unlink(missing_ok=True)
@@ -373,9 +376,13 @@ def main():
         print(f"\n{len(results)} scenarios, {leaking} returned a dangerous marker")
 
         if args.out:
-            with open(args.out, "w") as handle:
-                json.dump(results, handle, indent=2)
-            print(f"full results written to {args.out}")
+            try:
+                with open(prepared(args.out), "w") as handle:
+                    json.dump(results, handle, indent=2)
+            except OSError as error:
+                print(f"cannot write {args.out}: {error}")
+            else:
+                print(f"full results written to {args.out}")
     finally:
         stop_server(child)
 
