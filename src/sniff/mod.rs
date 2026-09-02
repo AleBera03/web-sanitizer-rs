@@ -3,12 +3,12 @@ use crate::policy::{Action, SniffAction, SubresourcesRules};
 use crate::report::{Location, SanitisationAction};
 use crate::scan::dos::zip::{OoxmlKind, zip_ooxml_kind};
 use crate::sniff::MimeType::{
-    ApplicationPdf, ApplicationXml, ApplicationZip, AudioFlac, AudioMp3, AudioWav, ImageGif,
-    ImageJpeg, ImagePng, ImageSvg, ImageTiff, ImageWebp, TextHtml, VideoAvi, VideoMp4,
+    ApplicationPdf, ApplicationXml, ApplicationZip, AudioFlac, AudioMp3, AudioWav, ExcelXlsx,
+    ImageGif, ImageJpeg, ImagePng, ImageSvg, ImageTiff, ImageWebp, PowerPointPptx, TextHtml,
+    TextJavascript, VideoAvi, VideoMp4, WordDocx,
 };
 
 use std::path::Path;
-use url::Url;
 
 // CONSTANTS
 // magic numbers for sniffing file types
@@ -45,6 +45,7 @@ pub enum MimeType {
     ImageSvg,
     ImageTiff,
     TextHtml,
+    TextJavascript,
     ApplicationPdf,
     ApplicationZip,
     ApplicationXml,
@@ -73,6 +74,7 @@ impl MimeType {
             MimeType::ImageSvg => "image/svg+xml",
             MimeType::ImageTiff => "image/tiff",
             MimeType::TextHtml => "text/html",
+            MimeType::TextJavascript => "text/javascript",
             MimeType::ApplicationPdf => "application/pdf",
             MimeType::ApplicationZip => "application/zip",
             MimeType::ApplicationXml => "application/xml",
@@ -107,6 +109,7 @@ impl MimeType {
             MimeType::ImageSvg => "svg",
             MimeType::ImageTiff => "tiff",
             MimeType::TextHtml => "html",
+            MimeType::TextJavascript => "js",
             MimeType::ApplicationPdf => "pdf",
             MimeType::ApplicationZip => "zip",
             MimeType::ApplicationXml => "xml",
@@ -128,11 +131,16 @@ impl MimeType {
 pub struct AcquiredInput {
     pub source: InputSource,
     pub data: Vec<u8>,
+    pub content_type: Option<String>,
 }
 
 impl AcquiredInput {
-    pub fn new(source: InputSource, data: Vec<u8>) -> Self {
-        Self { source, data }
+    pub fn new(source: InputSource, data: Vec<u8>, content_type: Option<String>) -> Self {
+        Self {
+            source,
+            data,
+            content_type,
+        }
     }
 }
 
@@ -201,7 +209,7 @@ fn read_declared_mime(input: &AcquiredInput) -> Option<MimeType> {
         }
 
         InputSource::File(path) => read_mime_from_file(path),
-        InputSource::Url(url) => read_mime_from_url(url),
+        InputSource::Url(_url) => input.content_type.as_deref(),
         InputSource::MalformedUrl(_) => None,
     }?;
 
@@ -266,17 +274,18 @@ fn read_mime_from_file(path: &Path) -> Option<&str> {
     path.extension()?.to_str()
 }
 
-fn read_mime_from_url(url: &Url) -> Option<&str> {
-    let last_segment = url.path_segments()?.next_back()?;
-    if last_segment.is_empty() {
-        return None;
-    }
-    Path::new(last_segment).extension()?.to_str()
-}
+// fn read_mime_from_url(url: &Url, content_type: Option<String>) -> Option<String> {
+//     let last_segment = url.path_segments()?.next_back()?;
+//     if last_segment.is_empty() {
+//         return content_type;
+//     }
+//     Path::new(last_segment).extension()?.to_str()
+// }
 
 /// Converts file extension to MIME type. Returns None if the extension is not recognized.
 fn mime_from_extension(ext: &str) -> Option<MimeType> {
     match ext.to_ascii_lowercase().as_str() {
+        //handling of file extensions
         "jpg" | "jpeg" => Some(ImageJpeg),
         "png" => Some(ImagePng),
         "gif" => Some(ImageGif),
@@ -288,6 +297,19 @@ fn mime_from_extension(ext: &str) -> Option<MimeType> {
         "zip" => Some(ApplicationZip),
         "xml" => Some(ApplicationXml),
         "flac" => Some(AudioFlac),
+        "mp3" => Some(AudioMp3),
+        "wav" => Some(AudioWav),
+        "avi" => Some(VideoAvi),
+        "mp4" => Some(VideoMp4),
+        "docx" => Some(WordDocx),
+        "xlsx" => Some(ExcelXlsx),
+        "pptx" => Some(PowerPointPptx),
+        //handling of http header content types
+        "application/octet-stream" => Some(ApplicationZip),
+        "text/html" => Some(TextHtml),
+        "text/xml" => Some(ApplicationXml),
+        "application/pdf" => Some(ApplicationPdf),
+        "text/javascript" => Some(TextJavascript),
         _ => None,
     }
 }
@@ -327,14 +349,15 @@ pub fn sniff_bytes(data: &[u8]) -> Option<MimeType> {
             data: Vec::new(),
         },
         data.to_vec(),
+        None,
     );
     read_actual_mime(&input, &crate::policy::ZipBudgets::default())
 }
 
 #[cfg(test)]
 mod tests {
-    use std::path::PathBuf;
     use crate::policy::ZipBudgets;
+    use std::path::PathBuf;
 
     use super::*;
 
@@ -349,6 +372,7 @@ mod tests {
                 data: data.to_vec(),
             },
             data: data.to_vec(),
+            content_type: None,
         }
     }
 
@@ -356,6 +380,7 @@ mod tests {
         AcquiredInput {
             source: InputSource::File(PathBuf::from(path)),
             data: data.to_vec(),
+            content_type: None,
         }
     }
 
@@ -363,19 +388,26 @@ mod tests {
         AcquiredInput {
             source: InputSource::Url(Url::parse(url).unwrap()),
             data: data.to_vec(),
+            content_type: None,
         }
     }
 
     #[test]
     fn detects_jpeg_from_magic_bytes() {
         let input = bytes_input("x", &[0xFF, 0xD8, 0xFF, 0x00]);
-        assert_eq!(read_actual_mime(&input, &budget()), Some(MimeType::ImageJpeg));
+        assert_eq!(
+            read_actual_mime(&input, &budget()),
+            Some(MimeType::ImageJpeg)
+        );
     }
 
     #[test]
     fn detects_png_from_magic_bytes() {
         let input = bytes_input("x", &[0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]);
-        assert_eq!(read_actual_mime(&input, &budget()), Some(MimeType::ImagePng));
+        assert_eq!(
+            read_actual_mime(&input, &budget()),
+            Some(MimeType::ImagePng)
+        );
     }
 
     #[test]
@@ -393,13 +425,19 @@ mod tests {
     #[test]
     fn detects_html_doctype() {
         let input = bytes_input("x", b"<!DOCTYPE html><html></html>");
-        assert_eq!(read_actual_mime(&input, &budget()), Some(MimeType::TextHtml));
+        assert_eq!(
+            read_actual_mime(&input, &budget()),
+            Some(MimeType::TextHtml)
+        );
     }
 
     #[test]
     fn detects_pdf() {
         let input = bytes_input("x", b"%PDF-1.7 ...");
-        assert_eq!(read_actual_mime(&input, &budget()), Some(MimeType::ApplicationPdf));
+        assert_eq!(
+            read_actual_mime(&input, &budget()),
+            Some(MimeType::ApplicationPdf)
+        );
     }
 
     #[test]
@@ -417,7 +455,10 @@ mod tests {
     #[test]
     fn detects_zip_ooxml() {
         let input = bytes_input("x", &[0x50, 0x4B, 0x03, 0x04, 0x00]);
-        assert_eq!(read_actual_mime(&input, &budget()), Some(MimeType::ApplicationZip));
+        assert_eq!(
+            read_actual_mime(&input, &budget()),
+            Some(MimeType::ApplicationZip)
+        );
     }
 
     #[test]
@@ -451,7 +492,10 @@ mod tests {
     #[test]
     fn detects_xml_and_svg() {
         assert_eq!(
-            read_actual_mime(&bytes_input("x", b"<?xml version=\"1.0\"?><root/>"), &budget()),
+            read_actual_mime(
+                &bytes_input("x", b"<?xml version=\"1.0\"?><root/>"),
+                &budget()
+            ),
             Some(MimeType::ApplicationXml)
         );
         assert_eq!(
@@ -507,6 +551,7 @@ mod tests {
         let input = AcquiredInput {
             source: InputSource::MalformedUrl("ht!tp://broken".to_string()),
             data: Vec::new(),
+            content_type: None,
         };
         assert_eq!(read_declared_mime(&input), None);
     }

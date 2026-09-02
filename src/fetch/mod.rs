@@ -13,15 +13,15 @@
 
 pub mod guard;
 
-use std::fmt;
 use std::io::{self, Read};
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
+use std::{eprintln, fmt};
 
 use thiserror::Error;
 use ureq::http::Response;
-use ureq::http::header::{CONTENT_TYPE, HeaderName, LOCATION};
+use ureq::http::header::{CONTENT_ENCODING, CONTENT_TYPE, HeaderName, LOCATION};
 use ureq::unversioned::transport::DefaultConnector;
 use ureq::{Body, Timeout};
 use url::Url;
@@ -225,6 +225,7 @@ impl Fetcher for HttpFetcher {
                     check_status(status)?;
                     let declared_mime = header(&response, CONTENT_TYPE);
                     check_declared_length(&response, policy.max_response_bytes)?;
+                    check_content_encoding(&response)?;
                     let body = read_capped(
                         response.into_body().into_reader(),
                         policy.max_response_bytes,
@@ -298,6 +299,15 @@ fn next_hop(status: u16, location: Option<&str>, current: &Url) -> Result<Option
 fn check_declared_length(response: &Response<Body>, cap: u64) -> Result<(), FetchError> {
     match response.body().content_length() {
         Some(len) if len > cap => Err(FetchError::BodyTooLarge { cap }),
+        _ => Ok(()),
+    }
+}
+
+fn check_content_encoding(response: &Response<Body>) -> Result<(), FetchError> {
+    match header(&response, CONTENT_ENCODING) {
+        Some(enc) if enc != "identity" => Err(FetchError::Transport(format!(
+            "unsupported content encoding `{enc}`"
+        ))),
         _ => Ok(()),
     }
 }

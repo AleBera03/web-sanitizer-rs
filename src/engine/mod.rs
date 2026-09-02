@@ -119,6 +119,7 @@ struct Acquired {
     data: Vec<u8>,
     url: Option<Url>,
     endpoint: Option<SocketAddr>,
+    content_type: Option<String>,
 }
 
 impl Engine {
@@ -234,6 +235,7 @@ impl Engine {
             data,
             url,
             endpoint,
+            content_type,
         } = acquired;
         // one checker per input: the pipeline and the sub-resource loop share it
         let checker = UrlChecker::new(
@@ -244,7 +246,7 @@ impl Engine {
             &self.policy.urls,
         );
         let sniff_outcome = sniff_input(
-            AcquiredInput::new(input, data),
+            AcquiredInput::new(input, data, content_type),
             &self.policy.subresources,
             0,
         );
@@ -336,6 +338,7 @@ impl Engine {
                 data: data.clone(),
                 url: None,
                 endpoint: None,
+                content_type: None,
             }),
             InputSource::File(path) => {
                 // Size check via metadata first: a file over budget is refused
@@ -353,6 +356,7 @@ impl Engine {
                     data,
                     url: None,
                     endpoint: None,
+                    content_type: None,
                 })
             }
             InputSource::Url(url) => {
@@ -371,6 +375,7 @@ impl Engine {
                     data: fetched.body,
                     url: Some(fetched.final_url),
                     endpoint: fetched.endpoint,
+                    content_type: fetched.declared_mime,
                 })
             }
             InputSource::MalformedUrl(s) => Err((
