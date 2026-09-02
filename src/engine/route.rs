@@ -57,6 +57,10 @@ pub fn route(
     url: &UrlChecker,
     _depth: u32, // TEMP: not yet used, but may be for budget policies
 ) -> RouteOutcome {
+    if let Some(action) = scan_dos_risks(&sniff_outcome, &policy.subresources, &policy.budgets) {
+        return RouteOutcome::refused(action);
+    }
+
     match sniff_outcome.mime_type() {
         Some(MimeType::TextHtml) => {
             let html_outcome = html::sanitize_html(&sniff_outcome.data, &policy.html, url);
@@ -74,33 +78,11 @@ pub fn route(
         | Some(MimeType::TextCss) => {
             scan_active_content(sniff_outcome, &policy.subresources).into()
         }
-        Some(MimeType::ApplicationZip) => {
-            if let Some(action) = scan_dos_risks(&sniff_outcome, &policy.subresources) {
-                return RouteOutcome {
-                    output: Vec::new(),
-                    actions: vec![action],
-                    refused: true,
-                    references: Vec::new(),
-                    base: None,
-                };
-            }
+        Some(MimeType::ApplicationZip)
+        | Some(MimeType::ApplicationXml)
+        | Some(MimeType::ImageSvg) => {
             scan_active_content(sniff_outcome, &policy.subresources).into()
         }
-
-        Some(MimeType::ApplicationXml) => {
-            if let Some(action) = scan_dos_risks(&sniff_outcome, &policy.subresources) {
-                return RouteOutcome {
-                    output: Vec::new(),
-                    actions: vec![action],
-                    refused: true,
-                    references: Vec::new(),
-                    base: None,
-                };
-            }
-            scan_active_content(sniff_outcome, &policy.subresources).into()
-        }
-
-        Some(MimeType::ImageSvg) => scan_active_content(sniff_outcome, &policy.subresources).into(),
 
         _ => RouteOutcome::scanned(sniff_outcome.data, Vec::new(), false),
     }
@@ -227,6 +209,26 @@ mod tests {
         assert!(outcome.refused);
         assert!(outcome.output.is_empty());
         assert_eq!(outcome.actions[0].rule_id, "scan.css.dangerous_scheme");
+    }
+
+    #[test]
+    fn an_oversized_raster_is_refused_before_any_handler() {
+        let mut bomb = vec![0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A];
+        bomb.extend_from_slice(&13u32.to_be_bytes());
+        bomb.extend_from_slice(b"IHDR");
+        bomb.extend_from_slice(&65535u32.to_be_bytes());
+        bomb.extend_from_slice(&65535u32.to_be_bytes());
+        bomb.extend_from_slice(&[0x08, 0x02, 0x00, 0x00, 0x00]);
+
+        let outcome = route(
+            sniffed(Some(MimeType::ImagePng), &bomb),
+            &Policy::builtin(),
+            &no_url_checker(),
+            0,
+        );
+        assert!(outcome.refused);
+        assert!(outcome.output.is_empty());
+        assert_eq!(outcome.actions[0].rule_id, "scan.image.dimensions");
     }
 
     #[test]
