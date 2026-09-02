@@ -1,4 +1,8 @@
-//! Address classification: the pure half of the guard.
+//! Address classification: which networks are out of bounds, and why.
+//!
+//! Pure and shared. The fetch guard (`crate::fetch::guard`) asks before opening
+//! a connection, the URL checker (`crate::urlcheck`) asks before re-emitting a
+//! link, and neither reaches the network from here.
 //!
 //! The table is hand-written because `IpAddr::is_global` is nightly-only
 //! and because these rows have to be read line by line anyway. Each row carries
@@ -240,7 +244,6 @@ impl IpDenyTable {
             .map(|row| row.rule)
     }
 }
-
 
 #[derive(Debug, Clone, Default)]
 pub struct AllowList {

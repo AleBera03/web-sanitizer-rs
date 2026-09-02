@@ -1,6 +1,7 @@
 use std::sync::LazyLock;
 
 use crate::html::sanitize_html;
+use crate::netaddr::IpDenyTable;
 use crate::policy::protectedset::SkeletonSet;
 use crate::policy::{HtmlRules, UrlRules, blockset::BlockSet};
 use crate::report::SanitisationAction;
@@ -9,6 +10,7 @@ use crate::urlcheck::cache::VerdictCache;
 
 static EMPTY_BLOCKSET: LazyLock<BlockSet> = LazyLock::new(BlockSet::default);
 static EMPTY_SKELETONSET: LazyLock<SkeletonSet> = LazyLock::new(SkeletonSet::default);
+static BUILTIN_ADDRESSES: LazyLock<IpDenyTable> = LazyLock::new(IpDenyTable::builtin);
 static DEFAULT_VERDICTCACHE: LazyLock<VerdictCache> = LazyLock::new(VerdictCache::default);
 static NEUTRAL_URL_RULES: LazyLock<UrlRules> = LazyLock::new(UrlRules::default);
 
@@ -20,6 +22,7 @@ pub fn svg_has_active_content(data: &[u8]) -> Vec<SanitisationAction> {
     let checker = UrlChecker::new(
         &EMPTY_BLOCKSET,
         &EMPTY_SKELETONSET,
+        &BUILTIN_ADDRESSES,
         &DEFAULT_VERDICTCACHE,
         &NEUTRAL_URL_RULES,
     );
@@ -36,6 +39,7 @@ pub fn sanitize_svg(data: &[u8]) -> Vec<u8> {
     let checker = UrlChecker::new(
         &EMPTY_BLOCKSET,
         &EMPTY_SKELETONSET,
+        &BUILTIN_ADDRESSES,
         &DEFAULT_VERDICTCACHE,
         &NEUTRAL_URL_RULES,
     );

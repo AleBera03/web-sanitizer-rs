@@ -55,7 +55,7 @@ impl VerdictCache {
                 let t = self.clock.fetch_add(1, Ordering::Relaxed);
                 entry.last_used.store(t, Ordering::Relaxed);
                 self.hits.fetch_add(1, Ordering::Relaxed);
-                Some(entry.verdict)
+                Some(entry.verdict.clone())
             }
             None => {
                 self.misses.fetch_add(1, Ordering::Relaxed);
@@ -109,6 +109,7 @@ impl VerdictCache {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::urlcheck::Label;
 
     fn len(cache: &VerdictCache) -> usize {
         cache.table.read().unwrap().len()
@@ -138,9 +139,18 @@ mod tests {
     #[test]
     fn insert_then_get_returns_the_verdict_and_counts_a_hit() {
         let cache = VerdictCache::default();
-        cache.insert("https://evil.com/".to_string(), Verdict::Blocked);
-        assert_eq!(cache.get("https://evil.com/"), Some(Verdict::Blocked));
-        assert_eq!(cache.get("https://evil.com/"), Some(Verdict::Blocked));
+        cache.insert(
+            "https://evil.com/".to_string(),
+            Verdict::plain(Label::Blocked),
+        );
+        assert_eq!(
+            cache.get("https://evil.com/"),
+            Some(Verdict::plain(Label::Blocked))
+        );
+        assert_eq!(
+            cache.get("https://evil.com/"),
+            Some(Verdict::plain(Label::Blocked))
+        );
         assert_eq!(counters(&cache), (2, 0));
         assert_eq!(len(&cache), 1);
     }
@@ -148,21 +158,48 @@ mod tests {
     #[test]
     fn distinct_urls_keep_distinct_verdicts() {
         let cache = VerdictCache::default();
-        cache.insert("https://evil.com/".to_string(), Verdict::Blocked);
-        cache.insert("https://xn--mnchen-3ya.de/".to_string(), Verdict::Idn);
-        cache.insert("https://example.com/".to_string(), Verdict::Clean);
-        assert_eq!(cache.get("https://evil.com/"), Some(Verdict::Blocked));
-        assert_eq!(cache.get("https://xn--mnchen-3ya.de/"), Some(Verdict::Idn));
-        assert_eq!(cache.get("https://example.com/"), Some(Verdict::Clean));
+        cache.insert(
+            "https://evil.com/".to_string(),
+            Verdict::plain(Label::Blocked),
+        );
+        cache.insert(
+            "https://xn--mnchen-3ya.de/".to_string(),
+            Verdict::plain(Label::Idn),
+        );
+        cache.insert(
+            "https://example.com/".to_string(),
+            Verdict::plain(Label::Clean),
+        );
+        assert_eq!(
+            cache.get("https://evil.com/"),
+            Some(Verdict::plain(Label::Blocked))
+        );
+        assert_eq!(
+            cache.get("https://xn--mnchen-3ya.de/"),
+            Some(Verdict::plain(Label::Idn))
+        );
+        assert_eq!(
+            cache.get("https://example.com/"),
+            Some(Verdict::plain(Label::Clean))
+        );
         assert_eq!(len(&cache), 3);
     }
 
     #[test]
     fn reinsert_overwrites_the_verdict_without_growing() {
         let cache = VerdictCache::default();
-        cache.insert("https://example.com/".to_string(), Verdict::Clean);
-        cache.insert("https://example.com/".to_string(), Verdict::Blocked);
-        assert_eq!(cache.get("https://example.com/"), Some(Verdict::Blocked));
+        cache.insert(
+            "https://example.com/".to_string(),
+            Verdict::plain(Label::Clean),
+        );
+        cache.insert(
+            "https://example.com/".to_string(),
+            Verdict::plain(Label::Blocked),
+        );
+        assert_eq!(
+            cache.get("https://example.com/"),
+            Some(Verdict::plain(Label::Blocked))
+        );
         assert_eq!(len(&cache), 1);
     }
 
@@ -171,18 +208,24 @@ mod tests {
         // the cache sits in front of `UrlChecker::check`, which is fed the
         // attribute value verbatim: two spellings of the same host are two keys
         let cache = VerdictCache::default();
-        cache.insert("http://evil.com/".to_string(), Verdict::Blocked);
+        cache.insert(
+            "http://evil.com/".to_string(),
+            Verdict::plain(Label::Blocked),
+        );
         assert_eq!(cache.get("http://EVIL.com/"), None);
         assert_eq!(cache.get("http://evil.com"), None);
         assert_eq!(cache.get(""), None);
-        assert_eq!(cache.get("http://evil.com/"), Some(Verdict::Blocked));
+        assert_eq!(
+            cache.get("http://evil.com/"),
+            Some(Verdict::plain(Label::Blocked))
+        );
     }
 
     #[test]
     fn empty_url_is_a_usable_key() {
         let cache = VerdictCache::default();
-        cache.insert(String::new(), Verdict::Clean);
-        assert_eq!(cache.get(""), Some(Verdict::Clean));
+        cache.insert(String::new(), Verdict::plain(Label::Clean));
+        assert_eq!(cache.get(""), Some(Verdict::plain(Label::Clean)));
     }
 
     #[test]
@@ -190,14 +233,20 @@ mod tests {
         let cache = VerdictCache::default();
         assert_eq!(cache.hit_rate(), 0.0);
         // an insert alone moves no counter
-        cache.insert("https://example.com/".to_string(), Verdict::Clean);
+        cache.insert(
+            "https://example.com/".to_string(),
+            Verdict::plain(Label::Clean),
+        );
         assert_eq!(cache.hit_rate(), 0.0);
     }
 
     #[test]
     fn hit_rate_is_hits_over_lookups() {
         let cache = VerdictCache::default();
-        cache.insert("https://example.com/".to_string(), Verdict::Clean);
+        cache.insert(
+            "https://example.com/".to_string(),
+            Verdict::plain(Label::Clean),
+        );
         cache.get("https://example.com/"); // hit
         cache.get("https://other.com/"); // miss
         assert_eq!(counters(&cache), (1, 1));
@@ -216,7 +265,7 @@ mod tests {
             NonZeroUsize::new(5).unwrap(),
         );
         for i in 0..100 {
-            cache.insert(format!("https://h{i}.test/"), Verdict::Clean);
+            cache.insert(format!("https://h{i}.test/"), Verdict::plain(Label::Clean));
         }
         assert_eq!(len(&cache), 10);
     }
@@ -226,29 +275,29 @@ mod tests {
         // sample rate above the table size makes the reservoir cover every
         // entry, so the random pick degenerates into an exact LRU choice
         let cache = VerdictCache::new(NonZeroUsize::new(3).unwrap(), NonZeroUsize::new(8).unwrap());
-        cache.insert("a".to_string(), Verdict::Clean);
-        cache.insert("b".to_string(), Verdict::Clean);
-        cache.insert("c".to_string(), Verdict::Clean);
+        cache.insert("a".to_string(), Verdict::plain(Label::Clean));
+        cache.insert("b".to_string(), Verdict::plain(Label::Clean));
+        cache.insert("c".to_string(), Verdict::plain(Label::Clean));
 
         // touch a and b: c is now the oldest
         assert!(cache.get("a").is_some());
         assert!(cache.get("b").is_some());
 
-        cache.insert("d".to_string(), Verdict::Blocked);
+        cache.insert("d".to_string(), Verdict::plain(Label::Blocked));
         assert_eq!(len(&cache), 3);
         assert!(!contains(&cache, "c"));
         assert!(contains(&cache, "a"));
         assert!(contains(&cache, "b"));
-        assert_eq!(cache.get("d"), Some(Verdict::Blocked));
+        assert_eq!(cache.get("d"), Some(Verdict::plain(Label::Blocked)));
     }
 
     #[test]
     fn insertion_order_alone_decides_the_victim_without_reads() {
         let cache = VerdictCache::new(NonZeroUsize::new(3).unwrap(), NonZeroUsize::new(8).unwrap());
-        cache.insert("a".to_string(), Verdict::Clean);
-        cache.insert("b".to_string(), Verdict::Clean);
-        cache.insert("c".to_string(), Verdict::Clean);
-        cache.insert("d".to_string(), Verdict::Clean);
+        cache.insert("a".to_string(), Verdict::plain(Label::Clean));
+        cache.insert("b".to_string(), Verdict::plain(Label::Clean));
+        cache.insert("c".to_string(), Verdict::plain(Label::Clean));
+        cache.insert("d".to_string(), Verdict::plain(Label::Clean));
         assert!(!contains(&cache, "a"));
         assert_eq!(len(&cache), 3);
     }
@@ -258,12 +307,12 @@ mod tests {
         // the `!contains_key` guard: overwriting does not grow the table, so
         // paying an eviction for it would drop a live entry for free
         let cache = VerdictCache::new(NonZeroUsize::new(2).unwrap(), NonZeroUsize::new(8).unwrap());
-        cache.insert("a".to_string(), Verdict::Clean);
-        cache.insert("b".to_string(), Verdict::Clean);
-        cache.insert("a".to_string(), Verdict::Blocked);
+        cache.insert("a".to_string(), Verdict::plain(Label::Clean));
+        cache.insert("b".to_string(), Verdict::plain(Label::Clean));
+        cache.insert("a".to_string(), Verdict::plain(Label::Blocked));
         assert_eq!(len(&cache), 2);
         assert!(contains(&cache, "b"));
-        assert_eq!(cache.get("a"), Some(Verdict::Blocked));
+        assert_eq!(cache.get("a"), Some(Verdict::plain(Label::Blocked)));
     }
 
     #[test]
@@ -274,11 +323,11 @@ mod tests {
             NonZeroUsize::new(5).unwrap(),
         );
         for i in 0..20 {
-            cache.insert(format!("k{i}"), Verdict::Clean);
+            cache.insert(format!("k{i}"), Verdict::plain(Label::Clean));
         }
         assert_eq!(len(&cache), 20);
         for i in 20..40 {
-            cache.insert(format!("k{i}"), Verdict::Clean);
+            cache.insert(format!("k{i}"), Verdict::plain(Label::Clean));
             assert_eq!(len(&cache), 20);
         }
     }
@@ -286,11 +335,11 @@ mod tests {
     #[test]
     fn capacity_of_one_keeps_only_the_last_url() {
         let cache = VerdictCache::new(NonZeroUsize::new(1).unwrap(), NonZeroUsize::new(1).unwrap());
-        cache.insert("a".to_string(), Verdict::Clean);
-        cache.insert("b".to_string(), Verdict::Blocked);
+        cache.insert("a".to_string(), Verdict::plain(Label::Clean));
+        cache.insert("b".to_string(), Verdict::plain(Label::Blocked));
         assert_eq!(len(&cache), 1);
         assert_eq!(cache.get("a"), None);
-        assert_eq!(cache.get("b"), Some(Verdict::Blocked));
+        assert_eq!(cache.get("b"), Some(Verdict::plain(Label::Blocked)));
     }
 
     // concurrency
@@ -311,7 +360,7 @@ mod tests {
                     for i in 0..OPS {
                         let url = format!("https://h{}.test/", i % HOSTS);
                         if cache.get(&url).is_none() {
-                            cache.insert(url, Verdict::Blocked);
+                            cache.insert(url, Verdict::plain(Label::Blocked));
                         }
                     }
                 });
@@ -325,7 +374,7 @@ mod tests {
                 .read()
                 .unwrap()
                 .values()
-                .all(|e| e.verdict == Verdict::Blocked)
+                .all(|e| e.verdict == Verdict::plain(Label::Blocked))
         );
 
         // no lookup is lost: every get lands on exactly one counter
@@ -349,7 +398,10 @@ mod tests {
             for t in 0..THREADS {
                 s.spawn(move || {
                     for i in 0..200 {
-                        cache.insert(format!("https://t{t}-{i}.test/"), Verdict::Clean);
+                        cache.insert(
+                            format!("https://t{t}-{i}.test/"),
+                            Verdict::plain(Label::Clean),
+                        );
                     }
                 });
             }

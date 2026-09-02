@@ -21,7 +21,7 @@ use std::time::{Duration, Instant};
 
 use thiserror::Error;
 use ureq::http::Response;
-use ureq::http::header::{CONTENT_TYPE, HeaderName, LOCATION};
+use ureq::http::header::{CONTENT_ENCODING, CONTENT_TYPE, HeaderName, LOCATION};
 use ureq::unversioned::transport::DefaultConnector;
 use ureq::{Body, Timeout};
 use url::Url;
@@ -108,8 +108,7 @@ pub struct Fetched {
     pub final_url: Url,
     /// `Content-Type` as declared by the server; sniffing may overrule it.
     pub declared_mime: Option<String>,
-    /// Vetted address the last hop was made to, carried so a sub-resource of
-    /// this document can be compared against it (T-11.5).
+    /// Vetted address the last hop was made to.
     pub endpoint: Option<SocketAddr>,
     pub body: Vec<u8>,
 }
@@ -226,6 +225,7 @@ impl Fetcher for HttpFetcher {
                     check_status(status)?;
                     let declared_mime = header(&response, CONTENT_TYPE);
                     check_declared_length(&response, policy.max_response_bytes)?;
+                    check_content_encoding(&response)?;
                     let body = read_capped(
                         response.into_body().into_reader(),
                         policy.max_response_bytes,
@@ -299,6 +299,15 @@ fn next_hop(status: u16, location: Option<&str>, current: &Url) -> Result<Option
 fn check_declared_length(response: &Response<Body>, cap: u64) -> Result<(), FetchError> {
     match response.body().content_length() {
         Some(len) if len > cap => Err(FetchError::BodyTooLarge { cap }),
+        _ => Ok(()),
+    }
+}
+
+fn check_content_encoding(response: &Response<Body>) -> Result<(), FetchError> {
+    match header(response, CONTENT_ENCODING) {
+        Some(enc) if enc != "identity" => Err(FetchError::Transport(format!(
+            "unsupported content encoding `{enc}`"
+        ))),
         _ => Ok(()),
     }
 }

@@ -97,7 +97,9 @@ pub struct UrlRules {
     pub protected_domains: Vec<String>,
     pub action_blocked: Action,
     pub action_homograph: Action,
-    /// Replacement value when a URL action is `rewrite`
+    pub action_userinfo: Action,
+    pub action_internal: Action,
+    pub action_idn: Action,
     pub placeholder_url: String,
 }
 
@@ -108,6 +110,9 @@ impl Default for UrlRules {
             protected_domains: Vec::new(),
             action_blocked: Action::Rewrite,
             action_homograph: Action::Rewrite,
+            action_userinfo: Action::Rewrite,
+            action_internal: Action::Rewrite,
+            action_idn: Action::Rewrite,
             placeholder_url: "#blocked".to_string(),
         }
     }
@@ -241,9 +246,7 @@ pub enum DosDetectedAction {
     Truncate,
 }
 
-/// Kinds of reference the sub-resource loop is allowed to fetch. The set is
-/// matched against the *sniffed* type of the body, never against the reference
-/// that produced it.
+/// Kinds of reference the sub-resource loop is allowed to fetch.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum SubresourceType {

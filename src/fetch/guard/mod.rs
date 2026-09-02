@@ -2,15 +2,13 @@
 //! and refuses the connection if any of them is forbidden.
 //!
 //! Three layers, from pure to impure:
-//! - [`table`] classifies an address
+//! - [`crate::netaddr`] classifies an address, and is shared with `urlcheck`
 //! - [`resolver`] turns a name into addresses behind an injectable trait
 //! - [`cache`] remembers verdicts with deny/allow asymmetry
 //! - [`GuardedResolver`] composes them and is handed to `ureq` through `Agent::with_parts`
 
 pub mod cache;
 pub mod resolver;
-pub mod table;
-
 use std::cell::Cell;
 use std::fmt;
 use std::io;
@@ -23,12 +21,11 @@ use ureq::http::Uri;
 use ureq::unversioned::resolver::{ResolvedSocketAddrs, Resolver};
 use ureq::unversioned::transport::NextTimeout;
 
+use crate::netaddr::{AllowList, CATEGORY_SSRF, IpDenyTable};
 use crate::policy::{ConfigError, GuardScope, SsrfRules};
 
 use cache::{ResolveCache, ResolveVerdict};
 use resolver::{NameResolver, SystemResolver};
-use table::{AllowList, CATEGORY_SSRF, IpDenyTable};
-
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FetchOrigin {
@@ -49,18 +46,19 @@ pub struct FetchContext {
 }
 
 impl FetchContext {
-    pub fn input_cli() -> FetchContext {
+    pub fn input(origin: FetchOrigin) -> FetchContext {
         FetchContext {
-            origin: FetchOrigin::InputCli,
+            origin,
             parent_endpoint: None,
         }
     }
 
+    pub fn input_cli() -> FetchContext {
+        FetchContext::input(FetchOrigin::InputCli)
+    }
+
     pub fn input_server() -> FetchContext {
-        FetchContext {
-            origin: FetchOrigin::InputServer,
-            parent_endpoint: None,
-        }
+        FetchContext::input(FetchOrigin::InputServer)
     }
 
     pub fn subresource(parent_endpoint: Option<SocketAddr>) -> FetchContext {
@@ -114,7 +112,6 @@ impl Guard {
     pub fn new(rules: &SsrfRules) -> Result<Guard, ConfigError> {
         Guard::with_resolver(rules, Arc::new(SystemResolver))
     }
-
 
     pub fn with_resolver(
         rules: &SsrfRules,
@@ -175,7 +172,6 @@ impl Guard {
         if !scope.guarded {
             return Ok(addrs);
         }
-
 
         let mut exempted = false;
         for candidate in &addrs {

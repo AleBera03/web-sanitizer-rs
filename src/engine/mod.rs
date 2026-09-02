@@ -54,6 +54,7 @@ pub mod route;
 pub mod subresource;
 
 use std::fs;
+use std::mem;
 use std::net::SocketAddr;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::Arc;
@@ -65,9 +66,10 @@ use jiff::Zoned;
 use url::Url;
 
 use crate::fetch::Fetcher;
-use crate::fetch::guard::FetchContext;
+use crate::fetch::guard::{FetchContext, FetchOrigin};
 use crate::html;
 use crate::input::{InputSource, OutputName};
+use crate::netaddr::IpDenyTable;
 use crate::policy::protectedset::SkeletonSet;
 use crate::policy::{ConfigError, Policy, blockset::BlockSet};
 use crate::report::{InputReport, InputStatus, RunCounters, RunReport};
@@ -82,9 +84,12 @@ pub struct Engine {
     policy: Arc<Policy>,
     blockset: Arc<BlockSet>,
     skeletonset: Arc<SkeletonSet>,
+    addresses: Arc<IpDenyTable>,
     /// Shared by every worker.
     verdictcache: Arc<VerdictCache>,
     fetcher: Arc<dyn Fetcher>,
+    /// Which frontend owns the engine.
+    origin: FetchOrigin,
 }
 
 /// Result of processing one input: the report plus the sanitized bytes when
@@ -114,6 +119,7 @@ struct Acquired {
     data: Vec<u8>,
     url: Option<Url>,
     endpoint: Option<SocketAddr>,
+    declared_mime: Option<String>,
 }
 
 impl Engine {
@@ -129,13 +135,21 @@ impl Engine {
                 .map(|s| s.as_str())
                 .collect(),
         )?);
+        let addresses = Arc::new(IpDenyTable::compile(&policy.ssrf)?);
         Ok(Engine {
             policy: Arc::new(policy),
             blockset,
             skeletonset,
+            addresses,
             verdictcache: Arc::new(VerdictCache::default()),
             fetcher,
+            origin: FetchOrigin::InputCli,
         })
+    }
+
+    pub fn with_origin(mut self, origin: FetchOrigin) -> Engine {
+        self.origin = origin;
+        self
     }
 
     pub fn policy(&self) -> &Policy {
@@ -143,7 +157,7 @@ impl Engine {
     }
 
     pub fn blockset(&self) -> &BlockSet {
-        &*self.blockset
+        &self.blockset
     }
 
     /// Process a single input. Never panics: the pipeline runs under
@@ -290,37 +304,44 @@ impl Engine {
             data,
             url,
             endpoint,
+            declared_mime,
         } = acquired;
         // one checker per input: the pipeline and the sub-resource loop share it
         let checker = UrlChecker::new(
             &self.blockset,
             &self.skeletonset,
+            &self.addresses,
             &self.verdictcache,
             &self.policy.urls,
         );
-        let sniff_outcome = sniff_input(
-            AcquiredInput::new(input, data),
+        let mut sniff_outcome = sniff_input(
+            AcquiredInput::new(input, data).declaring(declared_mime.clone()),
             &self.policy.subresources,
             0,
         );
-        let sniff_actions = sniff_outcome.actions.clone();
-        let sniff_refused = sniff_outcome.refused;
+        let sniffed_mime = sniff_outcome.verdict.sniffed.map(|m| m.label().to_string());
+        let sniff_actions = mem::take(&mut sniff_outcome.actions);
         let routed = route::route(sniff_outcome, &self.policy, &checker, 0);
 
         // sub-resources, only for a document that survived and only when asked
         let names = OutputName::derive(index, &source);
         let subresources =
             self.fetch_subresources(&routed, &checker, url.as_ref(), endpoint, &names, start);
-        let output = match &subresources {
-            Some(sub) if !sub.rewrites.is_empty() => {
-                html::rewrite_references(&routed.output, &sub.rewrites)
-            }
-            _ => routed.output,
-        };
-
         let mut actions = sniff_actions;
         actions.extend(routed.actions);
-        let refused = sniff_refused || routed.refused;
+        let (output, assets, reports) = match subresources {
+            Some(sub) => {
+                actions.extend(sub.actions);
+                let output = match sub.rewrites.is_empty() {
+                    true => routed.output,
+                    false => html::rewrite_references(&routed.output, &sub.rewrites),
+                };
+                (output, sub.assets, Some(sub.reports))
+            }
+            None => (routed.output, Vec::new(), None),
+        };
+
+        let refused = routed.refused;
         let status = if refused {
             InputStatus::Refused
         } else if actions.is_empty() {
@@ -328,13 +349,7 @@ impl Engine {
         } else {
             InputStatus::Sanitised
         };
-
-        let (assets, reports) = match subresources {
-            Some(sub) => (sub.assets, Some(sub.reports)),
-            None => (Vec::new(), None),
-        };
-        // a refused input produces a report and nothing else: handing bytes
-        // back would let the front-ends write an output file for it
+        // a refused input produces only a report
         let sanitized = if refused { None } else { Some(output) };
         Outcome {
             report: InputReport {
@@ -344,6 +359,8 @@ impl Engine {
                 bytes_in,
                 bytes_out: sanitized.as_ref().map_or(0, |out| out.len() as u64),
                 duration_ms: 0,
+                declared_mime,
+                sniffed_mime,
                 actions,
                 error: None,
                 subresources: reports,
@@ -391,6 +408,7 @@ impl Engine {
                 data: data.clone(),
                 url: None,
                 endpoint: None,
+                declared_mime: None,
             }),
             InputSource::File(path) => {
                 // Size check via metadata first: a file over budget is refused
@@ -408,6 +426,7 @@ impl Engine {
                     data,
                     url: None,
                     endpoint: None,
+                    declared_mime: None,
                 })
             }
             InputSource::Url(url) => {
@@ -420,12 +439,13 @@ impl Engine {
                 }
                 let fetched = self
                     .fetcher
-                    .fetch(url, &self.policy.fetch, FetchContext::input_cli())
+                    .fetch(url, &self.policy.fetch, FetchContext::input(self.origin))
                     .map_err(fetch_failure)?;
                 Ok(Acquired {
                     data: fetched.body,
                     url: Some(fetched.final_url),
                     endpoint: fetched.endpoint,
+                    declared_mime: fetched.declared_mime,
                 })
             }
             InputSource::MalformedUrl(s) => Err((
@@ -452,6 +472,10 @@ fn fetch_failure(error: crate::fetch::FetchError) -> (InputStatus, String) {
             InputStatus::SsrfBlocked,
             format!("{rule} refuses {address}"),
         ),
+        crate::fetch::FetchError::BodyTooLarge { cap } => (
+            InputStatus::BudgetExceeded,
+            format!("response body is over the {cap} byte budget"),
+        ),
         other => (InputStatus::FetchError, other.to_string()),
     }
 }
@@ -464,6 +488,8 @@ fn error_report(source: String, status: InputStatus, cause: String) -> InputRepo
         bytes_in: 0,
         bytes_out: 0,
         duration_ms: 0,
+        declared_mime: None,
+        sniffed_mime: None,
         actions: Vec::new(),
         error: Some(cause),
         subresources: None,
@@ -518,16 +544,36 @@ mod tests {
 
     #[test]
     fn a_refused_input_keeps_its_report_and_loses_its_bytes() {
-        // a declared jpeg that is really a png: the sniff mismatch refuses it,
-        // and no output must reach the front-ends
+        // a script file is refused by its type, and no output must reach the front-ends
         let outcome = engine().process(InputSource::Bytes {
-            name: "fake.jpg".to_string(),
-            data: vec![0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A],
+            name: "app.js".to_string(),
+            data: b"alert(1)".to_vec(),
         });
         assert_eq!(outcome.report.status, InputStatus::Refused);
         assert!(outcome.sanitized.is_none());
         assert_eq!(outcome.report.bytes_out, 0);
-        assert!(!outcome.report.actions.is_empty());
+        assert_eq!(outcome.report.actions[0].rule_id, "scan.script.active_type");
+    }
+
+    #[test]
+    fn a_contradicted_declaration_is_recorded_without_refusing() {
+        // a declared jpeg that is really a png: the bytes decide, the lie is on record
+        let png = vec![0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A];
+        let outcome = engine().process(InputSource::Bytes {
+            name: "fake.jpg".to_string(),
+            data: png.clone(),
+        });
+        assert_eq!(outcome.report.status, InputStatus::Sanitised);
+        assert_eq!(outcome.sanitized, Some(png));
+        assert_eq!(outcome.report.actions[0].rule_id, "sniff.mime_mismatch");
+        assert_eq!(outcome.report.sniffed_mime.as_deref(), Some("image/png"));
+    }
+
+    #[test]
+    fn a_local_input_declares_nothing() {
+        let outcome = engine().process(bytes(b"payload"));
+        assert_eq!(outcome.report.declared_mime, None);
+        assert_eq!(outcome.report.sniffed_mime, None);
     }
 
     #[test]
@@ -650,6 +696,7 @@ mod tests {
         body: Vec<u8>,
         mime: Option<String>,
         requested: std::sync::Mutex<Vec<String>>,
+        contexts: std::sync::Mutex<Vec<FetchContext>>,
     }
 
     impl RecordingFetcher {
@@ -658,11 +705,16 @@ mod tests {
                 body: body.to_vec(),
                 mime: mime.map(String::from),
                 requested: std::sync::Mutex::new(Vec::new()),
+                contexts: std::sync::Mutex::new(Vec::new()),
             })
         }
 
         fn requested(&self) -> Vec<String> {
             self.requested.lock().unwrap().clone()
+        }
+
+        fn contexts(&self) -> Vec<FetchContext> {
+            self.contexts.lock().unwrap().clone()
         }
     }
 
@@ -671,9 +723,10 @@ mod tests {
             &self,
             url: &Url,
             _policy: &crate::policy::FetchPolicy,
-            _ctx: FetchContext,
+            ctx: FetchContext,
         ) -> Result<crate::fetch::Fetched, crate::fetch::FetchError> {
             self.requested.lock().unwrap().push(url.to_string());
+            self.contexts.lock().unwrap().push(ctx);
             Ok(crate::fetch::Fetched {
                 final_url: url.clone(),
                 declared_mime: self.mime.clone(),
@@ -691,6 +744,130 @@ mod tests {
             name: "page.html".to_string(),
             data: PAGE.to_vec(),
         }
+    }
+
+    fn url_input() -> InputSource {
+        InputSource::Url(Url::parse("http://site.test/page.html").unwrap())
+    }
+
+    fn served(path: &str) -> InputSource {
+        InputSource::Url(Url::parse(&format!("http://site.test/{path}")).unwrap())
+    }
+
+    // the declared type, seen from the pipeline
+
+    #[test]
+    fn a_declared_script_is_refused_end_to_end() {
+        let fetcher = RecordingFetcher::new(
+            b"This is just plain text, not JavaScript code.",
+            Some("text/javascript"),
+        );
+        let engine = Engine::new(Policy::builtin(), fetcher).unwrap();
+        let outcome = engine.process(served("bundle"));
+
+        assert_eq!(outcome.report.status, InputStatus::Refused);
+        assert!(outcome.sanitized.is_none());
+        assert_eq!(outcome.report.bytes_out, 0);
+        assert_eq!(
+            outcome.report.declared_mime.as_deref(),
+            Some("text/javascript")
+        );
+        assert_eq!(outcome.report.sniffed_mime, None);
+        assert_eq!(outcome.report.actions[0].rule_id, "scan.script.active_type");
+    }
+
+    #[test]
+    fn a_generic_declaration_does_not_hide_the_sniffed_type() {
+        let png = [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A];
+        let fetcher = RecordingFetcher::new(&png, Some("application/octet-stream"));
+        let engine = Engine::new(Policy::builtin(), fetcher).unwrap();
+        let outcome = engine.process(served("pic"));
+
+        assert_eq!(outcome.report.status, InputStatus::Clean);
+        assert_eq!(
+            outcome.report.declared_mime.as_deref(),
+            Some("application/octet-stream")
+        );
+        assert_eq!(outcome.report.sniffed_mime.as_deref(), Some("image/png"));
+    }
+
+    #[test]
+    fn an_unrecognised_body_reports_no_sniffed_type() {
+        let fetcher =
+            RecordingFetcher::new(b"ZZZZ-not-a-known-magic", Some("application/octet-stream"));
+        let engine = Engine::new(Policy::builtin(), fetcher).unwrap();
+        let outcome = engine.process(served("blob"));
+
+        assert_eq!(outcome.report.status, InputStatus::Clean);
+        assert_eq!(outcome.report.sniffed_mime, None);
+    }
+
+    #[test]
+    fn html_declared_as_an_image_is_sanitised_as_html() {
+        let body = b"<!doctype html><html><body><script>alert('xss')</script></body></html>";
+        let fetcher = RecordingFetcher::new(body, Some("image/png"));
+        let engine = Engine::new(Policy::builtin(), fetcher).unwrap();
+        let outcome = engine.process(served("pic"));
+
+        assert_eq!(outcome.report.status, InputStatus::Sanitised);
+        let rules: Vec<&str> = outcome
+            .report
+            .actions
+            .iter()
+            .map(|a| a.rule_id.as_str())
+            .collect();
+        assert!(rules.contains(&"sniff.mime_mismatch"));
+        assert!(rules.contains(&"html.script.disallowed"));
+        assert!(!String::from_utf8_lossy(outcome.sanitized.as_deref().unwrap()).contains("alert"));
+    }
+
+    #[test]
+    fn html_without_a_doctype_is_sanitised_when_declared() {
+        let body = b"<html><body><script>alert(1)</script></body></html>";
+        let fetcher = RecordingFetcher::new(body, Some("text/html; charset=utf-8"));
+        let engine = Engine::new(Policy::builtin(), fetcher).unwrap();
+        let outcome = engine.process(served("page"));
+
+        assert_eq!(outcome.report.status, InputStatus::Sanitised);
+        assert_eq!(outcome.report.sniffed_mime, None);
+        assert!(!String::from_utf8_lossy(outcome.sanitized.as_deref().unwrap()).contains("alert"));
+    }
+
+    #[test]
+    fn an_input_url_is_fetched_as_cli_input_by_default() {
+        let fetcher = RecordingFetcher::new(b"", Some("text/plain"));
+        let engine = Engine::new(Policy::builtin(), fetcher.clone()).unwrap();
+        engine.process(url_input());
+
+        assert_eq!(fetcher.contexts(), [FetchContext::input_cli()]);
+    }
+
+    #[test]
+    fn a_server_engine_marks_its_input_urls_as_server_input() {
+        // the guard scope of `guard_input_urls = server` has no effect unless
+        // the origin reaches the fetcher, so this is what makes it real
+        let fetcher = RecordingFetcher::new(b"", Some("text/plain"));
+        let engine = Engine::new(Policy::builtin(), fetcher.clone())
+            .unwrap()
+            .with_origin(FetchOrigin::InputServer);
+        engine.process(url_input());
+
+        assert_eq!(fetcher.contexts(), [FetchContext::input_server()]);
+    }
+
+    #[test]
+    fn the_origin_does_not_leak_into_subresource_requests() {
+        // a reference read out of a document is always guarded, whichever
+        // front-end submitted the parent
+        let fetcher = RecordingFetcher::new(b"body{}", Some("text/css"));
+        let mut policy = Policy::builtin();
+        policy.subresources.fetch_subresources = true;
+        let engine = Engine::new(policy, fetcher.clone())
+            .unwrap()
+            .with_origin(FetchOrigin::InputServer);
+        engine.process(page());
+
+        assert_eq!(fetcher.contexts(), [FetchContext::subresource(None)]);
     }
 
     #[test]
@@ -725,6 +902,39 @@ mod tests {
             html.contains(r#"href="0-page.html.assets/asset-0.css""#),
             "{html}"
         );
+    }
+
+    #[test]
+    fn a_page_that_lost_a_reference_is_sanitised_rather_than_clean() {
+        let fetcher = RecordingFetcher::new(b"body{}", Some("text/css"));
+        let mut policy = Policy::builtin();
+        policy.subresources.fetch_subresources = true;
+        policy.subresources.max_requests = 0;
+        let engine = Engine::new(policy, fetcher.clone()).unwrap();
+        let outcome = engine.process(page());
+
+        assert!(fetcher.requested().is_empty());
+        assert_eq!(outcome.report.status, InputStatus::Sanitised);
+        assert_eq!(outcome.report.actions.len(), 1);
+        assert_eq!(
+            outcome.report.actions[0].rule_id,
+            "subresource.budget_exceeded"
+        );
+
+        let html = String::from_utf8(outcome.sanitized.unwrap()).unwrap();
+        assert!(html.contains(r##"href="#blocked""##), "{html}");
+    }
+
+    #[test]
+    fn a_page_whose_references_all_arrived_stays_clean() {
+        let fetcher = RecordingFetcher::new(b"body{}", Some("text/css"));
+        let mut policy = Policy::builtin();
+        policy.subresources.fetch_subresources = true;
+        let engine = Engine::new(policy, fetcher).unwrap();
+        let outcome = engine.process(page());
+
+        assert_eq!(outcome.report.status, InputStatus::Clean);
+        assert!(outcome.report.actions.is_empty());
     }
 
     #[test]
@@ -813,6 +1023,48 @@ mod tests {
                 .unwrap()
                 .contains("ssrf.link_local")
         );
+    }
+
+    #[test]
+    fn a_response_over_the_cap_lands_on_the_budget_status() {
+        struct HugeFetcher;
+        impl crate::fetch::Fetcher for HugeFetcher {
+            fn fetch(
+                &self,
+                _url: &Url,
+                _policy: &crate::policy::FetchPolicy,
+                _ctx: FetchContext,
+            ) -> Result<crate::fetch::Fetched, crate::fetch::FetchError> {
+                Err(crate::fetch::FetchError::BodyTooLarge { cap: 1024 })
+            }
+        }
+        let engine = Engine::new(Policy::builtin(), Arc::new(HugeFetcher)).unwrap();
+        let outcome = engine.process(InputSource::Url(Url::parse("http://huge.test/").unwrap()));
+
+        assert_eq!(outcome.report.status, InputStatus::BudgetExceeded);
+        assert!(outcome.report.error.as_deref().unwrap().contains("1024"));
+        assert!(outcome.sanitized.is_none());
+    }
+
+    #[test]
+    fn an_oversized_response_counts_as_refused_and_sets_the_exit_code() {
+        struct HugeFetcher;
+        impl crate::fetch::Fetcher for HugeFetcher {
+            fn fetch(
+                &self,
+                _url: &Url,
+                _policy: &crate::policy::FetchPolicy,
+                _ctx: FetchContext,
+            ) -> Result<crate::fetch::Fetched, crate::fetch::FetchError> {
+                Err(crate::fetch::FetchError::BodyTooLarge { cap: 1024 })
+            }
+        }
+        let engine = Engine::new(Policy::builtin(), Arc::new(HugeFetcher)).unwrap();
+        let report = engine.process_batch(vec![url_input()], 1, |_, _| {});
+
+        assert_eq!(report.run.inputs_refused, 1);
+        assert_eq!(report.run.inputs_errored, 0);
+        assert_eq!(report.exit_code(), 1);
     }
 
     #[test]
@@ -923,6 +1175,9 @@ mod tests {
         let start = Instant::now();
         let _ = engine.process_batch(inputs, 2, |_, _| {});
         let elapsed = start.elapsed();
-        assert!(elapsed < dur * 2, "expected concurrent workers, elapsed={:?}", elapsed);
+        assert!(
+            elapsed < dur * 2,
+            "expected concurrent workers, elapsed={elapsed:?}"
+        );
     }
 }

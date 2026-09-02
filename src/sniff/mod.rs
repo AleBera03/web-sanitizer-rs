@@ -1,10 +1,11 @@
 use crate::input::InputSource;
-use crate::policy::{Action, SniffAction, SubresourcesRules};
+use crate::policy::{Action, SubresourcesRules};
 use crate::report::{Location, SanitisationAction};
 use crate::scan::dos::zip::{OoxmlKind, zip_ooxml_kind};
 use crate::sniff::MimeType::{
-    ApplicationPdf, ApplicationXml, ApplicationZip, AudioFlac, AudioMp3, AudioWav, ImageGif,
-    ImageJpeg, ImagePng, ImageSvg, ImageTiff, ImageWebp, TextHtml, VideoAvi, VideoMp4,
+    ApplicationPdf, ApplicationXml, ApplicationZip, AudioFlac, AudioMp3, AudioWav, ExcelXlsx,
+    ImageGif, ImageJpeg, ImagePng, ImageSvg, ImageTiff, ImageWebp, PowerPointPptx, TextCss,
+    TextHtml, TextJavascript, VideoAvi, VideoMp4, WordDocx,
 };
 
 use std::path::Path;
@@ -17,6 +18,7 @@ const PNG: &[u8] = &[0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A];
 const GIF87A: &[u8] = b"GIF87a";
 const GIF89A: &[u8] = b"GIF89a";
 const HTML_DOCTYPE: &[u8] = b"<!DOCTYPE html>";
+const HTML_DOCTYPE_CASE: &[u8] = b"<!doctype html>";
 const PDF: &[u8] = b"%PDF-";
 const XML: &[u8] = b"<?xml";
 const FLAC: &[u8] = b"fLaC";
@@ -45,6 +47,8 @@ pub enum MimeType {
     ImageSvg,
     ImageTiff,
     TextHtml,
+    TextCss,
+    TextJavascript,
     ApplicationPdf,
     ApplicationZip,
     ApplicationXml,
@@ -73,6 +77,8 @@ impl MimeType {
             MimeType::ImageSvg => "image/svg+xml",
             MimeType::ImageTiff => "image/tiff",
             MimeType::TextHtml => "text/html",
+            MimeType::TextCss => "text/css",
+            MimeType::TextJavascript => "text/javascript",
             MimeType::ApplicationPdf => "application/pdf",
             MimeType::ApplicationZip => "application/zip",
             MimeType::ApplicationXml => "application/xml",
@@ -107,6 +113,8 @@ impl MimeType {
             MimeType::ImageSvg => "svg",
             MimeType::ImageTiff => "tiff",
             MimeType::TextHtml => "html",
+            MimeType::TextCss => "css",
+            MimeType::TextJavascript => "js",
             MimeType::ApplicationPdf => "pdf",
             MimeType::ApplicationZip => "zip",
             MimeType::ApplicationXml => "xml",
@@ -128,55 +136,77 @@ impl MimeType {
 pub struct AcquiredInput {
     pub source: InputSource,
     pub data: Vec<u8>,
+    pub declared_mime: Option<String>,
 }
 
 impl AcquiredInput {
     pub fn new(source: InputSource, data: Vec<u8>) -> Self {
-        Self { source, data }
+        Self {
+            source,
+            data,
+            declared_mime: None,
+        }
+    }
+
+    /// Records the `Content-Type` the server sent.
+    pub fn declaring(mut self, header: Option<String>) -> Self {
+        self.declared_mime = header;
+        self
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct MimeVerdict {
+    pub declared: Option<MimeType>,
+    pub sniffed: Option<MimeType>,
+}
+
+impl MimeVerdict {
+    pub fn effective(self) -> Option<MimeType> {
+        self.sniffed.or(self.declared)
+    }
+
+    pub fn contradicted(self) -> bool {
+        matches!((self.declared, self.sniffed), (Some(d), Some(s)) if d != s)
     }
 }
 
 pub struct SniffOutcome {
-    pub output: Option<Vec<u8>>,
-    pub mime_type: Option<MimeType>,
+    pub data: Vec<u8>,
+    pub verdict: MimeVerdict,
     pub actions: Vec<SanitisationAction>,
-    pub refused: bool,
+}
+
+impl SniffOutcome {
+    pub fn mime_type(&self) -> Option<MimeType> {
+        self.verdict.effective()
+    }
 }
 
 pub fn sniff_input(input: AcquiredInput, rules: &SubresourcesRules, verbose: u8) -> SniffOutcome {
     let _ = verbose;
-    let declared_mime = read_declared_mime(&input);
-    let actual_mime = read_actual_mime(&input, &rules.zip_budget);
+    let verdict = MimeVerdict {
+        declared: read_declared_mime(&input),
+        sniffed: read_actual_mime(&input, &rules.zip_budget),
+    };
 
-    let mismatch = matches!((declared_mime, actual_mime), (Some(d), Some(a)) if d != a);
-    if mismatch {
-        let action = match rules.sniff_rule {
-            SniffAction::Reject => Action::Refuse,
-            SniffAction::Rewrite => Action::Rewrite,
-        };
-        let output = if matches!(rules.sniff_rule, SniffAction::Rewrite) {
-            Some(input.data.clone())
-        } else {
-            None
-        };
-        let original = format!("declared={:?} actual={:?}", declared_mime, actual_mime);
-        return SniffOutcome {
-            output,
-            mime_type: actual_mime,
-            actions: vec![mismatch_action(action, original)],
-            refused: matches!(rules.sniff_rule, SniffAction::Reject),
-        };
-    }
+    let actions = match verdict.contradicted() {
+        true => vec![mismatch_action(verdict)],
+        false => Vec::new(),
+    };
 
     SniffOutcome {
-        output: Some(input.data),
-        mime_type: actual_mime,
-        actions: Vec::new(),
-        refused: false,
+        data: input.data,
+        verdict,
+        actions,
     }
 }
 
-fn mismatch_action(action: Action, original: String) -> SanitisationAction {
+fn mismatch_action(verdict: MimeVerdict) -> SanitisationAction {
+    let (declared, sniffed) = match (verdict.declared, verdict.sniffed) {
+        (Some(d), Some(s)) => (d.label(), s.label()),
+        _ => ("unknown", "unknown"),
+    };
     SanitisationAction {
         rule_id: "sniff.mime_mismatch".to_string(),
         category: "sniff".to_string(),
@@ -184,14 +214,25 @@ fn mismatch_action(action: Action, original: String) -> SanitisationAction {
             line: 0,
             byte_offset: 0,
         },
-        original,
-        action,
+        original: format!("declared={declared} sniffed={sniffed}"),
+        action: Action::Rewrite,
         replacement: None,
     }
 }
 
 fn read_declared_mime(input: &AcquiredInput) -> Option<MimeType> {
-    let ext = match &input.source {
+    if let Some(mime) = input
+        .declared_mime
+        .as_deref()
+        .and_then(mime_from_content_type)
+    {
+        return Some(mime);
+    }
+    mime_from_extension(read_extension(&input.source)?)
+}
+
+fn read_extension(source: &InputSource) -> Option<&str> {
+    match source {
         InputSource::Bytes { name, .. } => {
             if !name.is_empty() {
                 read_mime_from_bytes(name)
@@ -199,16 +240,13 @@ fn read_declared_mime(input: &AcquiredInput) -> Option<MimeType> {
                 None
             }
         }
-
         InputSource::File(path) => read_mime_from_file(path),
         InputSource::Url(url) => read_mime_from_url(url),
         InputSource::MalformedUrl(_) => None,
-    }?;
-
-    mime_from_extension(ext)
+    }
 }
 
-//TODO riordinare i tipi per macrotipi così rimane più leggibile
+// TODO: riordinare i tipi per macrotipi così rimane più leggibile
 fn read_actual_mime(
     input: &AcquiredInput,
     zip_budget: &crate::policy::ZipBudgets,
@@ -219,7 +257,7 @@ fn read_actual_mime(
         Some(ImagePng)
     } else if input.data.starts_with(GIF87A) || input.data.starts_with(GIF89A) {
         Some(ImageGif)
-    } else if input.data.starts_with(HTML_DOCTYPE) {
+    } else if input.data.starts_with(HTML_DOCTYPE) || input.data.starts_with(HTML_DOCTYPE_CASE) {
         Some(TextHtml)
     } else if input.data.starts_with(PDF) {
         Some(ApplicationPdf)
@@ -283,6 +321,8 @@ fn mime_from_extension(ext: &str) -> Option<MimeType> {
         "webp" => Some(ImageWebp),
         "svg" => Some(ImageSvg),
         "html" | "htm" => Some(TextHtml),
+        "css" => Some(TextCss),
+        "js" | "mjs" => Some(TextJavascript),
         "pdf" => Some(ApplicationPdf),
         "tif" | "tiff" => Some(ImageTiff),
         "zip" => Some(ApplicationZip),
@@ -290,7 +330,11 @@ fn mime_from_extension(ext: &str) -> Option<MimeType> {
         "flac" => Some(AudioFlac),
         "mp3" => Some(AudioMp3),
         "wav" => Some(AudioWav),
+        "avi" => Some(VideoAvi),
         "mp4" => Some(VideoMp4),
+        "docx" => Some(WordDocx),
+        "xlsx" => Some(ExcelXlsx),
+        "pptx" => Some(PowerPointPptx),
         _ => None,
     }
 }
@@ -312,26 +356,19 @@ pub fn mime_from_content_type(header: &str) -> Option<MimeType> {
         "image/svg+xml" => Some(ImageSvg),
         "image/tiff" => Some(ImageTiff),
         "text/html" | "application/xhtml+xml" => Some(TextHtml),
+        "text/css" => Some(TextCss),
+        "text/javascript"
+        | "application/javascript"
+        | "application/x-javascript"
+        | "text/ecmascript"
+        | "application/ecmascript"
+        | "text/jscript"
+        | "text/livescript" => Some(TextJavascript),
         "application/pdf" => Some(ApplicationPdf),
         "application/zip" => Some(ApplicationZip),
         "application/xml" | "text/xml" => Some(ApplicationXml),
         _ => None,
     }
-}
-
-// TEMP: `read_actual_mime` is the main sniffing function, but it needs an `AcquiredInput`. This public function
-// wraps it to allow sniffing a byte slice without having to construct an `AcquiredInput`.
-// `read_actual_mime` uses only data field of `AcquiredInput`.
-/// Sniffs the MIME type of a byte slice. Returns None if the type is not recognized.
-pub fn sniff_bytes(data: &[u8]) -> Option<MimeType> {
-    let input = AcquiredInput::new(
-        InputSource::Bytes {
-            name: String::new(),
-            data: Vec::new(),
-        },
-        data.to_vec(),
-    );
-    read_actual_mime(&input, &crate::policy::ZipBudgets::default())
 }
 
 #[cfg(test)]
@@ -346,27 +383,25 @@ mod tests {
     }
 
     fn bytes_input(name: &str, data: &[u8]) -> AcquiredInput {
-        AcquiredInput {
-            source: InputSource::Bytes {
+        AcquiredInput::new(
+            InputSource::Bytes {
                 name: name.to_string(),
                 data: data.to_vec(),
             },
-            data: data.to_vec(),
-        }
+            data.to_vec(),
+        )
     }
 
     fn file_input(path: &str, data: &[u8]) -> AcquiredInput {
-        AcquiredInput {
-            source: InputSource::File(PathBuf::from(path)),
-            data: data.to_vec(),
-        }
+        AcquiredInput::new(InputSource::File(PathBuf::from(path)), data.to_vec())
     }
 
     fn url_input(url: &str, data: &[u8]) -> AcquiredInput {
-        AcquiredInput {
-            source: InputSource::Url(Url::parse(url).unwrap()),
-            data: data.to_vec(),
-        }
+        AcquiredInput::new(InputSource::Url(Url::parse(url).unwrap()), data.to_vec())
+    }
+
+    fn served(mime: Option<&str>, data: &[u8]) -> AcquiredInput {
+        url_input("https://example.com/resource", data).declaring(mime.map(String::from))
     }
 
     #[test]
@@ -525,11 +560,48 @@ mod tests {
 
     #[test]
     fn declared_mime_for_malformed_url_is_none() {
-        let input = AcquiredInput {
-            source: InputSource::MalformedUrl("ht!tp://broken".to_string()),
-            data: Vec::new(),
-        };
+        let input = AcquiredInput::new(
+            InputSource::MalformedUrl("ht!tp://broken".to_string()),
+            Vec::new(),
+        );
         assert_eq!(read_declared_mime(&input), None);
+    }
+
+    #[test]
+    fn declared_mime_supports_css_and_javascript_extensions() {
+        assert_eq!(
+            read_declared_mime(&bytes_input("site.css", b"")),
+            Some(MimeType::TextCss)
+        );
+        assert_eq!(
+            read_declared_mime(&bytes_input("app.js", b"")),
+            Some(MimeType::TextJavascript)
+        );
+        assert_eq!(
+            read_declared_mime(&bytes_input("app.mjs", b"")),
+            Some(MimeType::TextJavascript)
+        );
+    }
+
+    // ---- declared MIME (header-based) ----------------------------------------
+
+    #[test]
+    fn the_header_declares_before_the_extension() {
+        let input =
+            url_input("https://example.com/logo.png", b"").declaring(Some("image/gif".to_string()));
+        assert_eq!(read_declared_mime(&input), Some(MimeType::ImageGif));
+    }
+
+    #[test]
+    fn an_unknown_header_falls_back_to_the_extension() {
+        let input = url_input("https://example.com/logo.png", b"")
+            .declaring(Some("application/octet-stream".to_string()));
+        assert_eq!(read_declared_mime(&input), Some(MimeType::ImagePng));
+    }
+
+    #[test]
+    fn no_header_and_no_extension_declare_nothing() {
+        assert_eq!(read_declared_mime(&served(None, b"")), None);
     }
 
     #[test]
@@ -580,15 +652,66 @@ mod tests {
         assert_eq!(read_declared_mime(&input), None);
     }
 
+    // ---- the verdict ---------------------------------------------------------
+
+    #[test]
+    fn a_signature_is_the_effective_type() {
+        let verdict = MimeVerdict {
+            declared: None,
+            sniffed: Some(MimeType::ImageJpeg),
+        };
+        assert_eq!(verdict.effective(), Some(MimeType::ImageJpeg));
+        assert!(!verdict.contradicted());
+    }
+
+    #[test]
+    fn a_declaration_fills_the_gap_a_signature_leaves() {
+        let verdict = MimeVerdict {
+            declared: Some(MimeType::TextJavascript),
+            sniffed: None,
+        };
+        assert_eq!(verdict.effective(), Some(MimeType::TextJavascript));
+        assert!(!verdict.contradicted());
+    }
+
+    #[test]
+    fn a_signature_beats_a_declaration_that_disagrees() {
+        let verdict = MimeVerdict {
+            declared: Some(MimeType::ImagePng),
+            sniffed: Some(MimeType::TextHtml),
+        };
+        assert_eq!(verdict.effective(), Some(MimeType::TextHtml));
+        assert!(verdict.contradicted());
+    }
+
+    #[test]
+    fn two_agreeing_sources_are_no_contradiction() {
+        let verdict = MimeVerdict {
+            declared: Some(MimeType::ImagePng),
+            sniffed: Some(MimeType::ImagePng),
+        };
+        assert!(!verdict.contradicted());
+    }
+
+    #[test]
+    fn nothing_known_is_no_type_and_no_contradiction() {
+        let verdict = MimeVerdict {
+            declared: None,
+            sniffed: None,
+        };
+        assert_eq!(verdict.effective(), None);
+        assert!(!verdict.contradicted());
+    }
+
     // ---- sniff_input ---------------------------------------------------------
-    // (invariati: sniff_input prende &SubresourcesRules, già corretto)
 
     #[test]
     fn sniff_input_reports_detected_mime_type() {
         let input = bytes_input("photo.jpg", &[0xFF, 0xD8, 0xFF, 0x00]);
         let rules = SubresourcesRules::default();
         let outcome = sniff_input(input, &rules, 0);
-        assert_eq!(outcome.mime_type, Some(MimeType::ImageJpeg));
+        assert_eq!(outcome.mime_type(), Some(MimeType::ImageJpeg));
+        assert!(outcome.actions.is_empty());
     }
 
     #[test]
@@ -596,18 +719,94 @@ mod tests {
         let input = bytes_input("x", b"not a known format");
         let rules = SubresourcesRules::default();
         let outcome = sniff_input(input, &rules, 0);
-        assert_eq!(outcome.mime_type, None);
+        assert_eq!(outcome.mime_type(), None);
+        assert_eq!(outcome.verdict.sniffed, None);
     }
 
     #[test]
-    fn sniff_input_handles_declared_actual_mismatch_without_panicking() {
-        let input = bytes_input(
-            "fake.jpg",
-            &[0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A],
-        );
+    fn a_contradiction_is_recorded_and_the_bytes_are_kept() {
+        let png = [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A];
+        let input = bytes_input("fake.jpg", &png);
         let rules = SubresourcesRules::default();
         let outcome = sniff_input(input, &rules, 0);
-        assert_eq!(outcome.mime_type, Some(MimeType::ImagePng));
+        assert_eq!(outcome.mime_type(), Some(MimeType::ImagePng));
+        assert_eq!(outcome.data, png);
+        assert_eq!(outcome.actions.len(), 1);
+        assert_eq!(outcome.actions[0].rule_id, "sniff.mime_mismatch");
+        assert_eq!(outcome.actions[0].action, Action::Rewrite);
+        assert_eq!(
+            outcome.actions[0].original,
+            "declared=image/jpeg sniffed=image/png"
+        );
+    }
+
+    #[test]
+    fn a_generic_declaration_does_not_hide_the_sniffed_type() {
+        let png = [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A];
+        let outcome = sniff_input(
+            served(Some("application/octet-stream"), &png),
+            &SubresourcesRules::default(),
+            0,
+        );
+        assert_eq!(outcome.mime_type(), Some(MimeType::ImagePng));
+        assert_eq!(outcome.verdict.declared, None);
+        assert!(outcome.actions.is_empty());
+    }
+
+    #[test]
+    fn an_unsniffable_body_takes_the_declared_type() {
+        let outcome = sniff_input(
+            served(Some("text/javascript"), b"This is just plain text."),
+            &SubresourcesRules::default(),
+            0,
+        );
+        assert_eq!(outcome.verdict.sniffed, None);
+        assert_eq!(outcome.mime_type(), Some(MimeType::TextJavascript));
+        assert!(outcome.actions.is_empty());
+    }
+
+    #[test]
+    fn a_signature_overrules_a_script_declaration() {
+        let png = [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A];
+        let outcome = sniff_input(
+            served(Some("text/javascript"), &png),
+            &SubresourcesRules::default(),
+            0,
+        );
+        assert_eq!(outcome.mime_type(), Some(MimeType::ImagePng));
+        assert_eq!(outcome.actions[0].rule_id, "sniff.mime_mismatch");
+    }
+
+    #[test]
+    fn html_declared_as_an_image_is_still_html() {
+        let outcome = sniff_input(
+            served(Some("image/png"), b"<!doctype html><script>1</script>"),
+            &SubresourcesRules::default(),
+            0,
+        );
+        assert_eq!(outcome.mime_type(), Some(MimeType::TextHtml));
+        assert_eq!(outcome.actions.len(), 1);
+    }
+
+    #[test]
+    fn html_without_a_doctype_is_html_when_declared() {
+        let outcome = sniff_input(
+            served(
+                Some("text/html; charset=utf-8"),
+                b"<html><script>1</script></html>",
+            ),
+            &SubresourcesRules::default(),
+            0,
+        );
+        assert_eq!(outcome.verdict.sniffed, None);
+        assert_eq!(outcome.mime_type(), Some(MimeType::TextHtml));
+    }
+
+    #[test]
+    fn an_empty_body_with_no_declaration_has_no_type() {
+        let outcome = sniff_input(served(None, b""), &SubresourcesRules::default(), 0);
+        assert_eq!(outcome.mime_type(), None);
+        assert!(outcome.data.is_empty());
     }
 
     // ---- labels, extensions, content types ---------------------------------
@@ -647,21 +846,38 @@ mod tests {
             mime_from_content_type("  IMAGE/PNG  "),
             Some(MimeType::ImagePng)
         );
-        assert_eq!(mime_from_content_type("text/css"), None);
+        assert_eq!(mime_from_content_type("text/css"), Some(MimeType::TextCss));
+        assert_eq!(mime_from_content_type("application/octet-stream"), None);
         assert_eq!(mime_from_content_type(""), None);
+        assert_eq!(mime_from_content_type(";charset=utf-8"), None);
     }
 
     #[test]
-    fn bytes_are_sniffed_without_any_declared_type() {
-        assert_eq!(
-            sniff_bytes(&[0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]),
-            Some(MimeType::ImagePng)
-        );
-        assert_eq!(sniff_bytes(b"body { color: red }"), None);
+    fn every_javascript_spelling_is_understood() {
+        for header in [
+            "text/javascript",
+            "text/javascript; charset=utf-8",
+            "application/javascript",
+            "application/x-javascript",
+            "text/ecmascript",
+            "application/ecmascript",
+            "text/jscript",
+            "text/livescript",
+            "TEXT/JAVASCRIPT",
+        ] {
+            assert_eq!(
+                mime_from_content_type(header),
+                Some(MimeType::TextJavascript),
+                "{header}"
+            );
+        }
     }
 
     #[test]
-    fn empty_bytes_are_of_no_known_type() {
-        assert_eq!(sniff_bytes(b""), None);
+    fn text_types_have_labels_and_extensions() {
+        assert_eq!(MimeType::TextJavascript.label(), "text/javascript");
+        assert_eq!(MimeType::TextJavascript.extension(), "js");
+        assert_eq!(MimeType::TextCss.label(), "text/css");
+        assert_eq!(MimeType::TextCss.extension(), "css");
     }
 }

@@ -2,12 +2,14 @@
 //! No sanitisation logic lives here
 
 mod args;
+mod serve;
 
 use std::fs;
 use std::path::Path;
 use std::process::ExitCode;
 use std::sync::Arc;
 
+use args::{Command, ScanArgs};
 use clap::Parser;
 use std::error::Error;
 
@@ -23,7 +25,7 @@ const EXIT_CONFIG: u8 = 2;
 
 fn main() -> ExitCode {
     let args = args::Args::parse();
-    match run(args) {
+    match dispatch(&args) {
         Ok(code) => ExitCode::from(code),
         Err(message) => {
             eprintln!("error: {message}");
@@ -31,8 +33,7 @@ fn main() -> ExitCode {
         }
     }
 }
-
-fn run(args: args::Args) -> Result<u8, Box<dyn Error>> {
+fn dispatch(args: &args::Args) -> Result<u8, Box<dyn Error>> {
     let mut policy = match &args.policy {
         Some(path) => Policy::load(path).map_err(|e| e.to_string())?,
         None => Policy::builtin(),
@@ -40,9 +41,16 @@ fn run(args: args::Args) -> Result<u8, Box<dyn Error>> {
     args.override_policy(&mut policy);
     warn_about_posture(&policy);
 
+    match &args.command {
+        Command::Scan(scan_args) => run(args, scan_args, policy),
+        Command::Serve(serve_args) => serve::run(policy, serve_args),
+    }
+}
+
+fn run(args: &args::Args, scan_args: &ScanArgs, policy: Policy) -> Result<u8, Box<dyn Error>> {
     let gathered = input::gather(
-        &args.inputs,
-        args.input_list.as_deref(),
+        &scan_args.inputs,
+        scan_args.input_list.as_deref(),
         &policy.input.extensions,
     )
     .map_err(|e| e.to_string())?;
@@ -51,7 +59,7 @@ fn run(args: args::Args) -> Result<u8, Box<dyn Error>> {
     }
 
     // unwritable output directory is detected before processing starts
-    prepare_out_dir(&args.out)?;
+    prepare_out_dir(&scan_args.out)?;
 
     // the fetch client is built from the policy that is about to be moved into
     // the engine, guard included: there is no unguarded client to build
@@ -61,7 +69,7 @@ fn run(args: args::Args) -> Result<u8, Box<dyn Error>> {
 
     let mut write_failures = 0usize;
     let verbose = args.verbose;
-    let out_dir = args.out.clone();
+    let out_dir = scan_args.out.clone();
     let mut report = engine.process_batch(gathered.inputs, args.jobs, |index, outcome| {
         if verbose > 0 {
             log_input(&outcome.report, verbose);
@@ -103,6 +111,8 @@ fn run(args: args::Args) -> Result<u8, Box<dyn Error>> {
             bytes_in: 0,
             bytes_out: 0,
             duration_ms: 0,
+            declared_mime: None,
+            sniffed_mime: None,
             actions: Vec::new(),
             error: Some("symlink resolves outside the tree root".to_string()),
             subresources: None,
@@ -111,7 +121,7 @@ fn run(args: args::Args) -> Result<u8, Box<dyn Error>> {
 
     let json = serde_json::to_string_pretty(&report)
         .map_err(|e| format!("cannot serialise report: {e}"))?;
-    let report_path = args.out.join("report.json");
+    let report_path = scan_args.out.join("report.json");
     fs::write(&report_path, &json)
         .map_err(|e| format!("cannot write {}: {e}", report_path.display()))?;
     println!("{json}");
@@ -146,11 +156,15 @@ fn prepare_out_dir(out: &Path) -> Result<(), String> {
     Ok(())
 }
 
-fn log_input(report: &InputReport, verbose: u8) {
-    let status = serde_json::to_value(report.status)
+pub fn status_slug(status: InputStatus) -> String {
+    serde_json::to_value(status)
         .ok()
         .and_then(|v| v.as_str().map(String::from))
-        .unwrap_or_default();
+        .unwrap_or_default()
+}
+
+fn log_input(report: &InputReport, verbose: u8) {
+    let status = status_slug(report.status);
     match &report.error {
         Some(cause) => eprintln!("{status} {} — {cause}", report.source),
         None => eprintln!(
