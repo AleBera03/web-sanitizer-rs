@@ -173,9 +173,25 @@ fn is_loopback(bind: &str) -> bool {
     }
 }
 
-/// Stop serving on Ctrl-C so the run ends through the exit-code contract
-/// instead of a signal.
+/// Stop serving on Ctrl-C or SIGTERM.
 async fn shutdown_signal() {
+    #[cfg(unix)]
+    {
+        use tokio::signal::unix::{SignalKind, signal};
+        let mut terminate = match signal(SignalKind::terminate()) {
+            Ok(terminate) => terminate,
+            Err(_) => return ctrl_c().await,
+        };
+        tokio::select! {
+            _ = ctrl_c() => {}
+            _ = terminate.recv() => {}
+        }
+    }
+    #[cfg(not(unix))]
+    ctrl_c().await;
+}
+
+async fn ctrl_c() {
     if tokio::signal::ctrl_c().await.is_err() {
         // no handler could be installed: serve until the process is killed
         std::future::pending::<()>().await;
