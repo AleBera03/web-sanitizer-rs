@@ -9,6 +9,7 @@ use crate::sniff::MimeType::{
 };
 
 use std::path::Path;
+use url::Url;
 
 // CONSTANTS
 // magic numbers for sniffing file types
