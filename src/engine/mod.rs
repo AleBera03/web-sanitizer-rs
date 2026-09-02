@@ -49,10 +49,6 @@
 //! ### Completed
 //! - acquire, input-bytes budget, panic isolation
 //! - pipeline: sniff -> route -> sub-resource loop -> report
-//!
-//! ### Missing
-//! - the worker pool that will replace the sequential loop in
-//!   [`Engine::process_batch`] behind the same signature
 
 pub mod route;
 pub mod subresource;
@@ -62,6 +58,8 @@ use std::mem;
 use std::net::SocketAddr;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::Arc;
+use std::sync::mpsc;
+use std::thread;
 use std::time::{Duration, Instant};
 
 use jiff::Zoned;
@@ -81,13 +79,14 @@ use crate::urlcheck::cache::VerdictCache;
 
 use subresource::{Asset, SubresourceLoop, SubresourceOutcome};
 
+#[derive(Clone)]
 pub struct Engine {
     policy: Arc<Policy>,
-    blockset: BlockSet,
-    skeletonset: SkeletonSet,
-    addresses: IpDenyTable,
-    /// Shared by every worker: read-mostly, so one `RwLock` and no copying.
-    verdictcache: VerdictCache,
+    blockset: Arc<BlockSet>,
+    skeletonset: Arc<SkeletonSet>,
+    addresses: Arc<IpDenyTable>,
+    /// Shared by every worker.
+    verdictcache: Arc<VerdictCache>,
     fetcher: Arc<dyn Fetcher>,
     /// Which frontend owns the engine.
     origin: FetchOrigin,
@@ -127,22 +126,22 @@ impl Engine {
     /// Compiles the policy's block-lists; a malformed list is a config error
     /// (exit 2) before any input is touched.
     pub fn new(policy: Policy, fetcher: Arc<dyn Fetcher>) -> Result<Engine, ConfigError> {
-        let blockset = BlockSet::from_files(&policy.urls.blocklists)?;
-        let skeletonset = SkeletonSet::build(
+        let blockset = Arc::new(BlockSet::from_files(&policy.urls.blocklists)?);
+        let skeletonset = Arc::new(SkeletonSet::build(
             policy
                 .urls
                 .protected_domains
                 .iter()
                 .map(|s| s.as_str())
                 .collect(),
-        )?;
-        let addresses = IpDenyTable::compile(&policy.ssrf)?;
+        )?);
+        let addresses = Arc::new(IpDenyTable::compile(&policy.ssrf)?);
         Ok(Engine {
             policy: Arc::new(policy),
             blockset,
             skeletonset,
             addresses,
-            verdictcache: VerdictCache::default(),
+            verdictcache: Arc::new(VerdictCache::default()),
             fetcher,
             origin: FetchOrigin::InputCli,
         })
@@ -167,7 +166,7 @@ impl Engine {
         self.process_indexed(0, input)
     }
 
-    /// Process a batch sequentially for now, calling `emit` with each finished
+    /// Process a batch with up to `jobs` workers, calling `emit` with each
     /// outcome and its position in the input list. The index is what names the
     /// outputs deterministically once completions stop arriving in order.
     pub fn process_batch<F>(&self, inputs: Vec<InputSource>, jobs: usize, mut emit: F) -> RunReport
@@ -175,6 +174,7 @@ impl Engine {
         F: FnMut(usize, &Outcome),
     {
         let workers = jobs.max(1);
+        let total = inputs.len();
         let mut report = RunReport::assemble(
             Zoned::now().to_string(),
             self.policy.source.to_string(),
@@ -185,11 +185,79 @@ impl Engine {
             },
             Vec::new(),
         );
-        for (index, input) in inputs.into_iter().enumerate() {
-            let outcome = self.process_indexed(index, input);
-            emit(index, &outcome);
-            report.push(outcome.report);
+
+        // Channels for jobs and results
+        let (job_tx, job_rx) = mpsc::channel::<(usize, InputSource)>();
+        let (res_tx, res_rx) = mpsc::channel::<(usize, Outcome)>();
+
+        // Make engine clonable and shareable with workers
+        let engine = Arc::new(self.clone());
+
+        // Wrap receiver so multiple workers can pull from it via a mutex
+        let job_rx = Arc::new(std::sync::Mutex::new(job_rx));
+
+        // Spawn workers
+        let mut handles = Vec::new();
+        for _ in 0..workers {
+            let job_rx = Arc::clone(&job_rx);
+            let res_tx = res_tx.clone();
+            let engine = Arc::clone(&engine);
+            let handle = thread::spawn(move || {
+                loop {
+                    // receive next job
+                    let job = {
+                        let guard = job_rx.lock().unwrap();
+                        guard.recv()
+                    };
+                    let (index, input) = match job {
+                        Ok(pair) => pair,
+                        Err(_) => break, // channel closed -> no more work
+                    };
+
+                    let outcome = engine.process_indexed(index, input);
+                    let _ = res_tx.send((index, outcome));
+                }
+            });
+            handles.push(handle);
         }
+
+        // Send jobs
+        for (index, input) in inputs.into_iter().enumerate() {
+            if job_tx.send((index, input)).is_err() {
+                break;
+            }
+        }
+        drop(job_tx); // close the channel so workers can exit when done
+
+        // Collect results as they come in
+        let mut outcomes: Vec<Option<Outcome>> = (0..total).map(|_| None).collect();
+        for _ in 0..total {
+            if let Ok((index, outcome)) = res_rx.recv() {
+                outcomes[index] = Some(outcome);
+            }
+        }
+
+        // Join workers
+        for h in handles {
+            let _ = h.join();
+        }
+
+        // Emit results in-order and assemble report
+        for index in 0..total {
+            if let Some(outcome) = outcomes[index].take() {
+                emit(index, &outcome);
+                report.push(outcome.report);
+            } else {
+                // Shouldn't happen, but produce a generic internal error
+                let err = error_report(
+                    format!("input-{index}"),
+                    InputStatus::InternalError,
+                    "missing outcome".to_string(),
+                );
+                report.push(err);
+            }
+        }
+
         // read once, after every worker is done: the counters order nothing
         report.run.cache_hits = self.verdictcache.hits();
         report.run.resolve_cache_hits = self.fetcher.resolve_cache_hits();
@@ -1018,6 +1086,98 @@ mod tests {
                 "http://site.test/dir/page.html",
                 "http://site.test/dir/style.css"
             ]
+        );
+    }
+
+    #[test]
+    fn worker_does_not_apply_fetch_budget_to_custom_fetchers() {
+        struct SlowFetcher;
+        impl crate::fetch::Fetcher for SlowFetcher {
+            fn fetch(
+                &self,
+                url: &Url,
+                _policy: &crate::policy::FetchPolicy,
+                _ctx: FetchContext,
+            ) -> Result<crate::fetch::Fetched, crate::fetch::FetchError> {
+                std::thread::sleep(std::time::Duration::from_millis(50));
+                Ok(crate::fetch::Fetched {
+                    final_url: url.clone(),
+                    declared_mime: None,
+                    endpoint: None,
+                    body: b"ok".to_vec(),
+                })
+            }
+        }
+
+        let mut policy = Policy::builtin();
+        policy.budgets.max_time_ms = 10;
+        let engine = Engine::new(policy, Arc::new(SlowFetcher)).unwrap();
+
+        let inputs = vec![
+            InputSource::Url(Url::parse("http://example.test/1").unwrap()),
+            InputSource::Url(Url::parse("http://example.test/2").unwrap()),
+            InputSource::Url(Url::parse("http://example.test/3").unwrap()),
+        ];
+
+        let report = engine.process_batch(inputs, 2, |_, _| {});
+        let exceeded = report
+            .inputs
+            .iter()
+            .filter(|r| r.status == InputStatus::BudgetExceeded)
+            .count();
+        assert_eq!(exceeded, 0);
+    }
+
+    #[test]
+    fn jobs_zero_uses_at_least_one_worker() {
+        let engine = Engine::new(Policy::builtin(), Arc::new(DisabledFetcher)).unwrap();
+        let report = engine.process_batch(vec![bytes(b"ok")], 0, |_, _| {});
+        assert_eq!(report.run.workers, 1);
+    }
+
+    #[test]
+    fn batch_propagates_fetch_error_for_url_inputs() {
+        let engine = Engine::new(Policy::builtin(), Arc::new(DisabledFetcher)).unwrap();
+        let inputs = vec![InputSource::Url(Url::parse("http://example.com/").unwrap())];
+        let report = engine.process_batch(inputs, 1, |_, _| {});
+        assert_eq!(report.inputs.len(), 1);
+        assert_eq!(report.inputs[0].status, InputStatus::FetchError);
+    }
+
+    #[test]
+    fn pool_runs_workers_concurrently() {
+        struct SleepFetcher(std::time::Duration);
+        impl crate::fetch::Fetcher for SleepFetcher {
+            fn fetch(
+                &self,
+                url: &Url,
+                _policy: &crate::policy::FetchPolicy,
+                _ctx: FetchContext,
+            ) -> Result<crate::fetch::Fetched, crate::fetch::FetchError> {
+                std::thread::sleep(self.0);
+                Ok(crate::fetch::Fetched {
+                    final_url: url.clone(),
+                    declared_mime: None,
+                    endpoint: None,
+                    body: b"x".to_vec(),
+                })
+            }
+        }
+
+        let mut policy = Policy::builtin();
+        policy.budgets.max_time_ms = 5000;
+        let dur = std::time::Duration::from_millis(200);
+        let engine = Engine::new(policy, Arc::new(SleepFetcher(dur))).unwrap();
+        let inputs = vec![
+            InputSource::Url(Url::parse("http://a.test/1").unwrap()),
+            InputSource::Url(Url::parse("http://a.test/2").unwrap()),
+        ];
+        let start = Instant::now();
+        let _ = engine.process_batch(inputs, 2, |_, _| {});
+        let elapsed = start.elapsed();
+        assert!(
+            elapsed < dur * 2,
+            "expected concurrent workers, elapsed={elapsed:?}"
         );
     }
 }

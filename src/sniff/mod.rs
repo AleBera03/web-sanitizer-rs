@@ -28,6 +28,7 @@ const MP3_ID3: &[u8] = b"ID3";
 const MP3_FRAME_SYNC: &[u8] = &[0xFF, 0xFB];
 const AVI_TYPE: &[u8] = b"AVI ";
 const WAVE_TYPE: &[u8] = b"WAVE";
+const WAVE_OFFSET: usize = 8;
 // MP4 files does not have the magic number at offset 0
 const MP4_FTYP: &[u8] = b"ftyp";
 const MP4_FTYP_OFFSET: usize = 4;
@@ -273,7 +274,7 @@ fn read_actual_mime(
         Some(AudioFlac)
     } else if input.data.starts_with(MP3_ID3) || input.data.starts_with(MP3_FRAME_SYNC) {
         Some(AudioMp3)
-    } else if input.data.starts_with(WAVE_TYPE) {
+    } else if input.data.get(WAVE_OFFSET..WAVE_OFFSET + WAVE_TYPE.len()) == Some(WAVE_TYPE) {
         Some(AudioWav)
     } else if input.data.starts_with(AVI_TYPE) {
         Some(VideoAvi)
