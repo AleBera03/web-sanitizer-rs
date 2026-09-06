@@ -5,6 +5,7 @@
 
 pub mod engine;
 pub mod fetch;
+pub mod fixture;
 pub mod html;
 pub mod input;
 pub mod netaddr;

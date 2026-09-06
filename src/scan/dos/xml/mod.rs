@@ -157,7 +157,8 @@ mod tests {
 
     #[test]
     fn xml_has_active_content_detects_entity_declarations() {
-        let payload = br#"<?xml version="1.0"?><!DOCTYPE root [<!ENTITY x "hello">]><root>&x;</root>"#;
+        let payload =
+            br#"<?xml version="1.0"?><!DOCTYPE root [<!ENTITY x "hello">]><root>&x;</root>"#;
         assert_eq!(xml_has_active_content(payload), Some(0));
     }
 

@@ -275,14 +275,12 @@ impl Ctx<'_> {
         }
     }
 
-    /// Neutralise `javascript:`/`data:` schemes in `href`/`src`/`action`
-    /// after entity-decoding and control-char stripping.
     fn neutralise_dangerous_schemes<H: HandlerTypes>(&self, el: &mut Element<'_, '_, H>) {
         let action = self.rules.action_dangerous_scheme;
         if action == Action::Allow {
             return;
         }
-        for name in ["href", "src", "action"] {
+        for name in HTML_ATTRIBUTES {
             let Some(value) = el.get_attribute(name) else {
                 continue;
             };
@@ -297,8 +295,6 @@ impl Ctx<'_> {
                     el.remove_attribute(name);
                     None
                 }
-                // Rewrite/Placeholder/Refuse all defang the URL in place; refuse
-                // additionally flags the whole input for the engine.
                 _ => {
                     let _ = el.set_attribute(name, neutralised_url.as_str());
                     if action == Action::Refuse {
@@ -331,7 +327,7 @@ impl Ctx<'_> {
             let verdict = self.url.check(&value);
             let (rule_id, category, action) = match verdict.label {
                 Label::Clean if verdict.canonical.is_some() => {
-                    ("url.normalised", "host_spoof", Action::Rewrite)
+                    ("url.normalised", "host_spoof", rules.action_normalised)
                 }
                 Label::Clean => continue,
                 Label::Blocked => ("url.blocklist", "blocklist", rules.action_blocked),
@@ -603,6 +599,64 @@ mod tests {
     }
 
     #[test]
+    fn a_submit_button_cannot_carry_a_javascript_scheme() {
+        let o = run(
+            r#"<form action="/pay"><button formaction="javascript:steal()">go</button></form>"#,
+        );
+        let s = out(&o);
+        assert!(!s.contains("javascript"));
+        assert!(s.contains(r##"formaction="#blocked""##));
+        assert_eq!(o.actions.len(), 1);
+        assert_eq!(o.actions[0].rule_id, "html.attr.dangerous_scheme");
+    }
+
+    #[test]
+    fn every_url_bearing_attribute_is_checked_for_a_dangerous_scheme() {
+        for name in HTML_ATTRIBUTES {
+            let document = format!(r#"<applet {name}="javascript:steal()">x</applet>"#);
+            let o = run(&document);
+            let s = out(&o);
+            assert!(!s.contains("javascript"), "{name} kept its scheme: {s}");
+            assert!(
+                s.contains(r##"="#blocked""##),
+                "{name} was not defanged: {s}"
+            );
+            assert_eq!(o.actions.len(), 1, "{name}");
+            assert_eq!(o.actions[0].rule_id, "html.attr.dangerous_scheme", "{name}");
+        }
+    }
+
+    #[test]
+    fn a_video_poster_cannot_smuggle_a_data_document() {
+        let o = run(r#"<video poster="data:text/html;base64,PHN2Zz4=" src="/clip.mp4"></video>"#);
+        let s = out(&o);
+        assert!(!s.contains("data:"));
+        assert!(s.contains(r#"src="/clip.mp4""#));
+        assert_eq!(o.actions.len(), 1);
+        assert_eq!(o.actions[0].rule_id, "html.attr.dangerous_scheme");
+    }
+
+    #[test]
+    fn a_data_attribute_with_a_dash_is_not_the_data_attribute() {
+        let o = run(r#"<div data-src="javascript:notAnAttribute()">x</div>"#);
+        assert!(o.actions.is_empty());
+        assert!(out(&o).contains("data-src"));
+    }
+
+    #[test]
+    fn a_form_and_its_button_are_both_neutralised() {
+        let o = run(
+            r#"<form action="javascript:a()"><button formaction="javascript:b()">go</button></form>"#,
+        );
+        let s = out(&o);
+        assert!(!s.contains("javascript"));
+        assert_eq!(o.actions.len(), 2);
+        for recorded in &o.actions {
+            assert_eq!(recorded.rule_id, "html.attr.dangerous_scheme");
+        }
+    }
+
+    #[test]
     fn entity_encoded_javascript_scheme_does_not_survive() {
         let o = run(r#"<a href="java&#115;cript:alert(1)">x</a>"#);
         let s = out(&o);
@@ -760,6 +814,15 @@ mod tests {
         sanitize_html(html.as_bytes(), &HtmlRules::default(), &checker)
     }
 
+    fn run_with_urls(html: &str, urls: &UrlRules) -> HtmlOutcome {
+        let blockset = BlockSet::set_from_list(&[]);
+        let skeletons = SkeletonSet::set_from_list(&[]);
+        let verdicache = VerdictCache::default();
+        let addresses = IpDenyTable::builtin();
+        let checker = UrlChecker::new(&blockset, &skeletons, &addresses, &verdicache, urls);
+        sanitize_html(html.as_bytes(), &HtmlRules::default(), &checker)
+    }
+
     #[test]
     fn blocklisted_anchor_is_rewritten_to_placeholder() {
         // rewrite to placeholder_url.
@@ -898,6 +961,27 @@ mod tests {
         let s = out(&o);
         assert!(s.contains(r#"href="http://169.254.169.254.other.test/""#));
         assert!(!s.contains('\u{FF0E}'));
+    }
+
+    #[test]
+    fn allowing_normalisation_reports_the_url_without_touching_it() {
+        // rewriting a clean but non-canonical URL is lossless, so a policy that
+        // must return the document unchanged can record it and move on
+        let document = r#"<a href="https://www.example.com:443/a">x</a>"#;
+        let allowed = UrlRules {
+            action_normalised: Action::Allow,
+            ..Default::default()
+        };
+        let o = run_with_urls(document, &allowed);
+        assert_eq!(o.actions.len(), 1);
+        assert_eq!(o.actions[0].rule_id, "url.normalised");
+        assert_eq!(o.actions[0].action, Action::Allow);
+        assert!(o.actions[0].replacement.is_none());
+        assert_eq!(out(&o), document);
+
+        let rewritten = run_with_urls(document, &UrlRules::default());
+        assert_eq!(rewritten.actions[0].action, Action::Rewrite);
+        assert!(out(&rewritten).contains(r#"href="https://www.example.com/a""#));
     }
 
     #[test]

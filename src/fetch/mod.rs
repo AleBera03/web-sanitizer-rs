@@ -218,8 +218,6 @@ impl Fetcher for HttpFetcher {
             let status = response.status().as_u16();
 
             match next_hop(status, header(&response, LOCATION).as_deref(), &current)? {
-                // T-11.4: the next hop re-enters scheme check and guard, because
-                // it is a new request through the same resolver
                 Some(next) => current = next,
                 None => {
                     check_status(status)?;
@@ -699,9 +697,6 @@ mod tests {
         }
     }
 
-    /// The client under the *default* SSRF policy. The transport tests below
-    /// talk to a loopback server as `InputCli`, which the default scope
-    /// (`server`) leaves unguarded — that is T-11.7, not a test loophole.
     fn client(policy: &FetchPolicy) -> HttpFetcher {
         HttpFetcher::new(policy, &SsrfRules::default()).expect("default ssrf policy compiles")
     }
@@ -1082,8 +1077,6 @@ mod tests {
 
     #[test]
     fn a_redirect_into_a_forbidden_address_is_refused_at_that_hop() {
-        // T-11.4: redirect laundering. The public hop answers, the next one is
-        // the metadata endpoint and never gets a connection.
         let server = TestServer::start(vec![
             redirect_to(302, "http://169.254.169.254/latest/meta-data/"),
             ok_body("text/plain", b"never reached"),
@@ -1115,7 +1108,6 @@ mod tests {
 
     #[test]
     fn an_input_url_follows_the_configured_scope() {
-        // T-11.7: the same loopback URL, guarded or not depending on who asked
         let server = TestServer::start(vec![ok_body("text/html", b"<p>hi</p>")]);
         let policy = policy();
         let rules = SsrfRules {

@@ -146,7 +146,6 @@ impl Guard {
     }
 
     fn decide(&self, host: &str, port: u16, scope: Scope) -> Result<Vec<SocketAddr>, GuardError> {
-        // an allow-listed name never reaches the table (T-11.6)
         if self.allow.allows_host(host) {
             return self.lookup(host, port);
         }
@@ -572,7 +571,6 @@ mod tests {
 
     #[test]
     fn an_allow_listed_host_bypasses_the_table() {
-        // T-11.6, the intranet-mirror escape hatch
         let rules = SsrfRules {
             allow_hosts: vec!["intranet.local".to_string()],
             ..SsrfRules::default()

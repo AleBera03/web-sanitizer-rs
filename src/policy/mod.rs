@@ -100,6 +100,7 @@ pub struct UrlRules {
     pub action_userinfo: Action,
     pub action_internal: Action,
     pub action_idn: Action,
+    pub action_normalised: Action,
     pub placeholder_url: String,
 }
 
@@ -113,6 +114,7 @@ impl Default for UrlRules {
             action_userinfo: Action::Rewrite,
             action_internal: Action::Rewrite,
             action_idn: Action::Rewrite,
+            action_normalised: Action::Rewrite,
             placeholder_url: "#blocked".to_string(),
         }
     }
@@ -305,8 +307,6 @@ impl Default for SubresourcesRules {
     }
 }
 
-/// Which requests the SSRF guard applies to when the URL is the *input* rather
-/// than something a document asked for (spec T-11.7).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum GuardScope {
@@ -413,7 +413,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn builtin_defaults_match_spec_tc8() {
+    fn builtin_defaults() {
         let p = Policy::builtin();
         assert_eq!(p.budgets.max_input_bytes, 10 * 1024 * 1024);
         assert_eq!(p.budgets.max_time_ms, 10_000);
@@ -430,9 +430,9 @@ mod tests {
     }
 
     #[test]
-    fn subresource_and_ssrf_defaults_match_spec_tc10_tc11() {
+    fn subresource_and_ssrf_defaults() {
         let p = Policy::builtin();
-        assert!(!p.subresources.fetch_subresources); // opt-in, never assumed
+        assert!(!p.subresources.fetch_subresources);
         assert_eq!(p.subresources.max_depth, 1);
         assert_eq!(p.subresources.max_requests, 32);
         assert_eq!(p.subresources.max_total_bytes, 50 * 1024 * 1024);
@@ -477,6 +477,15 @@ mod tests {
         // untouched keys keep their defaults
         assert_eq!(p.subresources.max_requests, 32);
         assert!(p.ssrf.same_origin_exemption);
+    }
+
+    #[test]
+    fn url_normalisation_defaults_to_rewriting_and_can_be_allowed() {
+        assert_eq!(UrlRules::default().action_normalised, Action::Rewrite);
+        let p: Policy = toml::from_str("[urls]\naction_normalised = \"allow\"\n").unwrap();
+        assert_eq!(p.urls.action_normalised, Action::Allow);
+        // the other url actions keep their defaults
+        assert_eq!(p.urls.action_blocked, Action::Rewrite);
     }
 
     #[test]

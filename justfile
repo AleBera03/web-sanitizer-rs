@@ -22,9 +22,40 @@ load-image:
 
 [group("test")]
 run-image:
-    -docker container rm -f evil-origin
+    docker container rm -f evil-origin
     docker run -d -p 3100:3100 --name evil-origin evil-origin
 
-[group("test")]
+[group("eval")]
 scenarios *ARGS:
-    python3 scenarios/run_scenarios.py {{ARGS}}
+    cargo xtask scenarios {{ARGS}}
+
+[group("eval")]
+ground-truth:
+    cargo xtask ground-truth
+
+[group("eval")]
+correctness *ARGS:
+    cargo xtask correctness {{ARGS}}
+
+[group("eval")]
+latency *ARGS:
+    cargo xtask latency {{ARGS}}
+
+[group("eval")]
+phases *ARGS:
+    cargo xtask phases {{ARGS}}
+
+[group("eval")]
+memory *ARGS:
+    cargo xtask memory {{ARGS}}
+
+[group("eval")]
+plots:
+    cargo xtask plots
+
+[group("eval")]
+evaluate: ground-truth correctness latency phases memory plots
+
+[group("eval")]
+bench *ARGS:
+    cargo bench --bench throughput {{ARGS}}

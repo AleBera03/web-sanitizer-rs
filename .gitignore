@@ -2,13 +2,13 @@
 /target
 
 # Docs
-doc/requirements
-doc/spec
-doc/gen
+/doc/requirements
+/doc/spec
+/doc/gen
 
 # Scenarios
-scenarios/evil-origin.tar
-scenarios/evil-origin.zip
+/scenarios/evil-origin.tar
+/scenarios/evil-origin.zip
 
-# Python
-__pycache__
+# Eval outputs
+/eval

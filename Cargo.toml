@@ -1,3 +1,6 @@
+[workspace]
+members = ["xtask"]
+
 [package]
 name = "web-sanitizer-rs"
 version = "0.1.0"
@@ -34,3 +37,8 @@ cssparser = "0.37.0"
 
 [dev-dependencies]
 tempfile = "3"
+criterion = "0.5"
+
+[[bench]]
+name = "throughput"
+harness = false

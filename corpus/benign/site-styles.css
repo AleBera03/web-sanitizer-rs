@@ -1,0 +1,39 @@
+:root {
+  --ink: #101014;
+  --paper: #fbfbf9;
+  --accent: #2a78d6;
+}
+
+body {
+  margin: 0;
+  font-family: "Inter", system-ui, sans-serif;
+  color: var(--ink);
+  background: var(--paper);
+  line-height: 1.55;
+}
+
+.masthead {
+  display: flex;
+  align-items: baseline;
+  gap: 1rem;
+  padding: 1.5rem clamp(1rem, 4vw, 3rem);
+  border-bottom: 1px solid #e4e4de;
+}
+
+.masthead a {
+  color: var(--accent);
+  text-decoration: none;
+}
+
+.card {
+  border: 1px solid #e4e4de;
+  border-radius: 10px;
+  padding: 1rem 1.25rem;
+}
+
+@media (max-width: 40rem) {
+  .masthead {
+    flex-direction: column;
+    gap: 0.25rem;
+  }
+}
