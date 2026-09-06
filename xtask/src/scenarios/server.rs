@@ -3,6 +3,7 @@ use std::process::{Child, Command, Stdio};
 use std::time::Duration;
 
 use crate::error::{Result, XtaskError};
+use crate::paths::release_binary;
 
 use super::origin::{reachable, wait_until};
 
@@ -38,7 +39,7 @@ impl Sanitiser {
                 "something already listens on {base}; stop it or pass another port"
             )));
         }
-        let binary = root.join("target/release/wsrs");
+        let binary = release_binary(root);
         if !binary.is_file() {
             return Err(XtaskError::Harness(format!(
                 "{} is missing; run cargo build --release first",

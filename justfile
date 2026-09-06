@@ -1,6 +1,9 @@
+[windows]
+set shell := ["powershell.exe", "-NoLogo", "-NoProfile", "-Command"]
+
 [group("docs")]
 docgen: # see doc/gen after launched command
-    rustdoc --target-dir doc/gen
+    cargo doc --target-dir doc/gen
 
 [group("final-report")]
 book-deps:
@@ -20,7 +23,7 @@ load-image:
 
 [group("test")]
 run-image:
-    docker container rm -f evil-origin
+    -docker container rm -f evil-origin
     docker run -d -p 3100:3100 --name evil-origin evil-origin
 
 [group("eval")]

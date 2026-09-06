@@ -77,6 +77,11 @@ impl RunKind {
     }
 }
 
+pub fn release_binary(root: &Path) -> PathBuf {
+    root.join("target/release")
+        .join(format!("wsrs{}", std::env::consts::EXE_SUFFIX))
+}
+
 pub fn policy_slug(name: &str) -> String {
     Path::new(name)
         .file_stem()
@@ -206,6 +211,16 @@ mod tests {
             custom.ends_with("eval/results/malicious/permissive"),
             "{}",
             custom.display()
+        );
+    }
+
+    #[test]
+    fn the_release_binary_is_named_the_way_the_host_names_executables() {
+        let binary = release_binary(Path::new("/work"));
+        assert!(binary.starts_with("/work/target/release"), "{binary:?}");
+        assert_eq!(
+            binary.file_name().unwrap().to_string_lossy(),
+            if cfg!(windows) { "wsrs.exe" } else { "wsrs" }
         );
     }
 
