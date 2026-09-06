@@ -2,6 +2,9 @@
 
 ## Development
 
+### Dependencies
+- [docker](https://docs.docker.com/get-started/get-docker/)
+
 The project uses [just](https://github.com/casey/just#Installation). Installing it using `cargo` is recommend
 
 ```
@@ -59,7 +62,7 @@ cargo xtask correctness   # detection and false positives against the ground tru
 cargo xtask latency       # latency against input size
 cargo xtask phases        # where the time goes inside one input
 cargo xtask memory        # peak resident set, one process per input
-cargo xtask scenarios     # the evil-origin harness, needs docker
+cargo xtask scenarios     # the evil-origin harness
 cargo bench --bench throughput
 cargo xtask plots
 ```
@@ -83,7 +86,7 @@ just scenarios --out /scenarios/out
 ### Coverage
 
 `just coverage` measures line coverage with [tarpaulin](https://github.com/xd009642/tarpaulin)
-inside a container, so the only thing the machine needs is docker.
+inside a container.
 
 ```
 just coverage
