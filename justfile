@@ -1,5 +1,3 @@
-import 'doc/spec/ignore.just'
-
 [group("docs")]
 docgen: # see doc/gen after launched command
     rustdoc --target-dir doc/gen
