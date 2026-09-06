@@ -1,0 +1,8 @@
+[default]
+out = ["Html", "Stdout"]
+output-dir = "eval/coverage"
+exclude-files = ["xtask/*", "benches/*", "target/*"]
+timeout = "300s"
+skip-clean = true
+# a red test still leaves a measurement behind
+no-fail-fast = true

@@ -22,6 +22,9 @@ load-image          Load docker image from .tar file
 run-image           Run container
 serve               Run wsrs command with --serve option
 
+[coverage]
+coverage            Line coverage with tarpaulin, in a container by default
+
 [eval]
 ground-truth        Render corpus/ground-truth.toml as a table for the report
 correctness         Detection rate, false-positive rate and the rule confusion table
@@ -75,4 +78,33 @@ cargo xtask scenarios --help
 For example, to save report in a json file
 ```
 just scenarios --out /scenarios/out
+```
+
+### Coverage
+
+`just coverage` measures line coverage with [tarpaulin](https://github.com/xd009642/tarpaulin)
+inside a container, so the only thing the machine needs is docker.
+
+```
+just coverage
+```
+
+The run mounts the repository at `/volume`, keeps cargo's cache and its build artefacts
+under `target/coverage` so the host build stays untouched, and drops the container to the
+owner of the tree so the report is readable afterwards. `tarpaulin.toml` holds the settings:
+a summary on the terminal and an HTML report at `eval/coverage/tarpaulin-report.html`.
+
+Anything after `--` reaches tarpaulin options:
+
+```
+just coverage -- --out Lcov          # another report format
+just coverage -- --fail-under 70     # non-zero exit below the threshold
+```
+
+With tarpaulin already installed on the machine, `--local` skips docker and runs it directly.
+That path only works where tarpaulin does, x86-64 Linux for the default ptrace engine.
+
+```
+cargo install --locked cargo-tarpaulin
+just coverage --local
 ```

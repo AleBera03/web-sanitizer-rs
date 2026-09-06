@@ -56,6 +56,10 @@ plots:
 [group("eval")]
 evaluate: ground-truth correctness latency phases memory plots
 
+[group("coverage")]
+coverage *ARGS:
+    cargo xtask coverage {{ARGS}}
+
 [group("eval")]
 bench *ARGS:
     cargo bench --bench throughput {{ARGS}}

@@ -1,4 +1,5 @@
 mod correctness;
+mod coverage;
 mod document;
 mod engine;
 mod error;
@@ -114,6 +115,18 @@ enum Command {
         /// Assume the evil origin is already running
         #[arg(long, short)]
         no_setup: bool,
+    },
+    /// Line coverage over the test suite, inside a container by default
+    Coverage {
+        /// Run tarpaulin straight on this machine instead of in a container
+        #[arg(long, short)]
+        local: bool,
+        /// Image carrying cargo-tarpaulin
+        #[arg(long, short, default_value = coverage::IMAGE)]
+        image: String,
+        /// Anything after -- goes to cargo tarpaulin as it stands
+        #[arg(last = true)]
+        args: Vec<String>,
     },
     /// Draw every chart the results support. Takes no options: it reads
     /// eval/results and works out what can be drawn
@@ -246,6 +259,16 @@ fn dispatch(cli: Cli) -> Result<()> {
                 0 => Ok(()),
                 measured => Err(error::XtaskError::Violations { measured }),
             }
+        }
+        Command::Coverage { local, image, args } => {
+            let run = coverage::Run {
+                image,
+                local,
+                extra: args,
+            };
+            let report = coverage::run(&layout, &run)?;
+            println!("\nreport at {}", report.display());
+            Ok(())
         }
         Command::Plots => {
             let written = plots::all(&layout, &truth)?;

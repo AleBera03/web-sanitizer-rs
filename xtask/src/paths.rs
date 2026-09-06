@@ -119,6 +119,10 @@ impl Layout {
         self.join("eval/plots")
     }
 
+    pub fn coverage(&self) -> PathBuf {
+        self.join("eval/coverage")
+    }
+
     pub fn result_file(&self, name: &str) -> PathBuf {
         self.results().join(name)
     }
@@ -178,6 +182,7 @@ mod tests {
         let layout = Layout::discover();
         assert!(layout.results().ends_with("eval/results"));
         assert!(layout.plots().ends_with("eval/plots"));
+        assert!(layout.coverage().ends_with("eval/coverage"));
         assert!(layout.result_file("a.csv").ends_with("eval/results/a.csv"));
     }
 
@@ -215,7 +220,11 @@ mod tests {
     #[test]
     fn scenarios_and_charts_have_their_own_sections() {
         let layout = Layout::discover();
-        assert!(layout.scenario_file("scenarios.csv").ends_with("eval/results/scenarios/scenarios.csv"));
+        assert!(
+            layout
+                .scenario_file("scenarios.csv")
+                .ends_with("eval/results/scenarios/scenarios.csv")
+        );
         assert!(
             layout
                 .plot_file(Section::Compare, "latency-vs-size.png")
