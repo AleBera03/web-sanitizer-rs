@@ -210,7 +210,10 @@ pub fn phases(
     Ok((rows, progress))
 }
 
-fn read_vm_hwm() -> u64 {
+
+#[cfg(target_os = "linux")]
+fn peak_rss_kib() -> u64 {
+    // VmHWM is already KiB.
     std::fs::read_to_string("/proc/self/status")
         .ok()
         .and_then(|text| {
@@ -225,8 +228,43 @@ fn read_vm_hwm() -> u64 {
         .unwrap_or(0)
 }
 
+#[cfg(target_os = "macos")]
+fn peak_rss_kib() -> u64 {
+    // ru_maxrss counts bytes on macOS, unlike the KiB every other unix reports.
+    let mut usage = std::mem::MaybeUninit::<libc::rusage>::uninit();
+    match unsafe { libc::getrusage(libc::RUSAGE_SELF, usage.as_mut_ptr()) } {
+        0 => (unsafe { usage.assume_init() }.ru_maxrss as u64) / 1024,
+        _ => 0,
+    }
+}
+
+#[cfg(windows)]
+fn peak_rss_kib() -> u64 {
+    use windows_sys::Win32::System::ProcessStatus::{
+        GetProcessMemoryInfo, PROCESS_MEMORY_COUNTERS,
+    };
+    use windows_sys::Win32::System::Threading::GetCurrentProcess;
+
+    // PeakWorkingSetSize counts bytes
+    // the call wants the struct size in cb.
+    let mut counters = PROCESS_MEMORY_COUNTERS {
+        cb: size_of::<PROCESS_MEMORY_COUNTERS>() as u32,
+        ..Default::default()
+    };
+    let read = unsafe { GetProcessMemoryInfo(GetCurrentProcess(), &mut counters, counters.cb) };
+    match read {
+        0 => 0,
+        _ => (counters.PeakWorkingSetSize as u64) / 1024,
+    }
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "macos", windows)))]
+fn peak_rss_kib() -> u64 {
+    0
+}
+
 pub fn probe(layout: &Layout, file: &Path, policy_name: &str, fetching: bool) -> Result<()> {
-    let baseline = read_vm_hwm();
+    let baseline = peak_rss_kib();
     let mut policy = engine::policy(layout.root(), policy_name)?;
     policy.subresources.fetch_subresources = fetching;
     let engine = engine::engine(policy)?;
@@ -242,7 +280,7 @@ pub fn probe(layout: &Layout, file: &Path, policy_name: &str, fetching: bool) ->
         }
         false => engine::process(&engine, file),
     };
-    let peak = read_vm_hwm();
+    let peak = peak_rss_kib();
     println!(
         "{{\"peak_rss_kib\":{},\"baseline_kib\":{},\"bytes_in\":{},\"status\":\"{}\"}}",
         peak,
@@ -394,7 +432,7 @@ mod tests {
 
     #[test]
     fn the_high_water_mark_is_readable_and_positive_on_this_platform() {
-        assert!(read_vm_hwm() > 0);
+        assert!(peak_rss_kib() > 0);
     }
 
     #[test]

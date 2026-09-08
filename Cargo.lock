@@ -4465,6 +4465,7 @@ dependencies = [
  "charming",
  "clap",
  "csv",
+ "libc",
  "serde",
  "serde_json",
  "thiserror",
@@ -4472,6 +4473,7 @@ dependencies = [
  "ureq",
  "url",
  "web-sanitizer-rs",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

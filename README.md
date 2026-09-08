@@ -83,6 +83,41 @@ For example, to save report in a json file
 just scenarios --out /scenarios/out
 ```
 
+### Docker on Windows
+
+On Windows the scenario suite can run around 3.3 seconds per HTTP connection, so a redirect chain pays it once per hop and
+`triple-hop-to-script-html` alone takes 13 seconds. Time is spent waiting on a TCP connect that never completes.
+
+Three things line up to produce it:
+
+1. `localhost` resolves to `::1` before `127.0.0.1` on Windows.
+2. With `networkingMode=mirrored` in `%USERPROFILE%\.wslconfig`, Docker Desktop claims a
+   published port on both address families but services only IPv4. A connect to
+   `[::1]:<published port>` is black-holed rather than refused, so the client waits for a
+   timeout instead of failing over at once. Publishing the port as `127.0.0.1:3100:3100`
+   does not help, and an explicit `[::1]:3100:3100` is ignored.
+3. `ureq` tries the resolved addresses in sequence, splitting the connect budget
+   geometrically. With two addresses the first gets `connect_timeout_ms * 1.0/1.5`, so the
+   default 5000 ms spends 3333 ms on the unreachable `::1` before trying `127.0.0.1`.
+
+**The fix is to leave `networkingMode` unset**, which selects NAT mode and forwards IPv6
+loopback correctly. Remove the line from `%USERPROFILE%\.wslconfig`, then:
+
+```
+wsl --shutdown
+```
+
+and start Docker Desktop again.
+
+With that out of the way the suite is dominated by the two `slow-drip` runs, which are slow
+on purpose to exercise the read timeout; every other scenario lands in 10-20 ms.
+
+Mirrored mode is worth having for other reasons, such as reaching Windows host services from WSL,
+and some VPN setups. So if you need it, `scenarios/policy-fetch.toml` and
+`policy-nofetch.toml` set `connect_timeout_ms = 450` as a safety net.
+
+Linux and macOS are unaffected.
+
 ### Coverage
 
 `just coverage` measures line coverage with [tarpaulin](https://github.com/xd009642/tarpaulin)
