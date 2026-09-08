@@ -74,3 +74,116 @@ fn strip_from_dict(dict: &mut Dictionary) {
         strip_dangerous_keys(value);
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn serialized_document(objects: impl IntoIterator<Item = Object>) -> Vec<u8> {
+        let mut document = Document::with_version("1.7");
+        for object in objects {
+            document.add_object(object);
+        }
+
+        let mut output = Vec::new();
+        document.save_to(&mut output).unwrap();
+        output
+    }
+
+    fn dictionary_with_key(key: &[u8]) -> Object {
+        let mut dictionary = Dictionary::new();
+        dictionary.set(key, Object::Boolean(true));
+        Object::Dictionary(dictionary)
+    }
+
+    #[test]
+    fn clean_pdf_is_not_reported() {
+        let data = serialized_document([Object::Dictionary(Dictionary::from_iter([
+            (b"Type", Object::Name(b"Catalog".to_vec())),
+        ]))]);
+
+        assert_eq!(pdf_has_active_content(&data), None);
+    }
+
+    #[test]
+    fn every_dangerous_key_is_detected() {
+        for key in DANGEROUS_KEYS {
+            let data = serialized_document([dictionary_with_key(key)]);
+
+            assert_eq!(pdf_has_active_content(&data), Some(0), "key {:?}", key);
+        }
+    }
+
+    #[test]
+    fn dangerous_keys_are_detected_in_nested_arrays_and_dictionaries() {
+        let mut nested_dictionary = Dictionary::new();
+        nested_dictionary.set(b"JS", Object::Boolean(true));
+
+        let nested = Object::Array(vec![Object::Dictionary(Dictionary::from_iter([
+            (
+                b"Nested".to_vec(),
+                Object::Dictionary(nested_dictionary),
+            ),
+        ]))]);
+        let mut outer = Dictionary::new();
+        outer.set(b"Contents", nested);
+        let data = serialized_document([Object::Dictionary(outer)]);
+
+        assert_eq!(pdf_has_active_content(&data), Some(0));
+    }
+
+    #[test]
+    fn dangerous_keys_are_detected_in_stream_dictionaries() {
+        let mut stream_dictionary = Dictionary::new();
+        stream_dictionary.set(b"OpenAction", Object::Boolean(true));
+        let data = serialized_document([Object::Stream(lopdf::Stream::new(
+            stream_dictionary,
+            Vec::new(),
+        ))]);
+
+        assert_eq!(pdf_has_active_content(&data), Some(0));
+    }
+
+    #[test]
+    fn invalid_pdf_is_not_reported_or_sanitized() {
+        let data = b"not a PDF";
+
+        assert_eq!(pdf_has_active_content(data), None);
+        assert_eq!(sanitize_pdf(data), None);
+    }
+
+    #[test]
+    fn sanitizing_removes_dangerous_keys_recursively() {
+        let mut nested_dictionary = Dictionary::new();
+        nested_dictionary.set(b"Launch", Object::Boolean(true));
+
+        let mut stream_dictionary = Dictionary::new();
+        stream_dictionary.set(b"AA", Object::Boolean(true));
+        stream_dictionary.set(
+            b"Nested",
+            Object::Array(vec![Object::Dictionary(nested_dictionary)]),
+        );
+
+        let mut root = Dictionary::new();
+        root.set(b"JavaScript", Object::Boolean(true));
+        root.set(
+            b"Stream",
+            Object::Stream(lopdf::Stream::new(stream_dictionary, Vec::new())),
+        );
+        let data = serialized_document([Object::Dictionary(root)]);
+        let sanitized = sanitize_pdf(&data).unwrap();
+
+        assert_eq!(pdf_has_active_content(&sanitized), None);
+        assert!(sanitized.len() > 0);
+    }
+
+    #[test]
+    fn sanitizing_does_not_modify_input() {
+        let data = serialized_document([dictionary_with_key(b"JS")]);
+        let original = data.clone();
+
+        let _ = sanitize_pdf(&data);
+
+        assert_eq!(data, original);
+    }
+}

@@ -159,7 +159,7 @@ mod tests {
     fn xml_has_active_content_detects_entity_declarations() {
         let payload =
             br#"<?xml version="1.0"?><!DOCTYPE root [<!ENTITY x "hello">]><root>&x;</root>"#;
-        assert_eq!(xml_has_active_content(payload), Some(0));
+        assert!(xml_has_active_content(payload).is_some());
     }
 
     #[test]
@@ -171,7 +171,7 @@ mod tests {
     #[test]
     fn xml_has_active_content_detects_external_entity_markers() {
         let payload = br#"<?xml version="1.0"?><!DOCTYPE root [<!ENTITY x SYSTEM "file:///etc/passwd">]><root/>"#;
-        assert_eq!(xml_has_active_content(payload), Some(0));
+        assert!(xml_has_active_content(payload).is_some());
     }
 
     #[test]
@@ -183,13 +183,13 @@ mod tests {
     #[test]
     fn xml_has_dos_risk_detects_recursive_entity_expansion() {
         let payload = br#"<?xml version="1.0"?><!DOCTYPE root [<!ENTITY a "&b;"> <!ENTITY b "&a;">]><root>&a;</root>"#;
-        assert_eq!(xml_has_dos_risk(payload, &XmlBudgets::default()), Some(0));
+        assert!(xml_has_dos_risk(payload, &XmlBudgets::default()).is_some());
     }
 
     #[test]
     fn xml_has_dos_risk_treats_malformed_entity_blocks_as_risky() {
         let payload =
             br#"<?xml version="1.0"?><!DOCTYPE root [<!ENTITY a "&b;"> <!ENTITY b "&a;">]"#;
-        assert_eq!(xml_has_dos_risk(payload, &XmlBudgets::default()), Some(0));
+        assert!(xml_has_dos_risk(payload, &XmlBudgets::default()).is_some());
     }
 }

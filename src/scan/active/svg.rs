@@ -70,4 +70,35 @@ mod tests {
         let actions = svg_has_active_content(svg);
         assert!(!actions.is_empty());
     }
+
+    #[test]
+    fn sanitize_svg_removes_inline_scripts() {
+        let svg = br#"<svg xmlns="http://www.w3.org/2000/svg"><script>alert(1)</script><circle r="5"/></svg>"#;
+
+        let sanitized = String::from_utf8(sanitize_svg(svg)).unwrap();
+
+        assert!(!sanitized.contains("<script"));
+        assert!(!sanitized.contains("alert(1)"));
+        assert!(sanitized.contains("circle"));
+    }
+
+    #[test]
+    fn sanitize_svg_removes_event_handlers() {
+        let svg = br#"<svg onload="alert(1)" xmlns="http://www.w3.org/2000/svg"><circle r="5"/></svg>"#;
+
+        let sanitized = String::from_utf8(sanitize_svg(svg)).unwrap();
+
+        assert!(!sanitized.to_ascii_lowercase().contains("onload"));
+        assert!(sanitized.contains("circle"));
+    }
+
+    #[test]
+    fn sanitize_svg_rewrites_dangerous_urls() {
+        let svg = br#"<svg xmlns="http://www.w3.org/2000/svg"><a href="javascript:alert(1)"><circle r="5"/></a></svg>"#;
+
+        let sanitized = String::from_utf8(sanitize_svg(svg)).unwrap();
+
+        assert!(!sanitized.contains("javascript:"));
+        assert!(sanitized.contains(r##"href="#blocked""##));
+    }
 }
