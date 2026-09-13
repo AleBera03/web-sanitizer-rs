@@ -21,23 +21,23 @@ just book-deps      Install via cargo dependencies for build final report pdf
 just book-build     Build the book from mdbook and mdbook-pdf
 
 [test]
-load-image          Load docker image from .tar file
-run-image           Run container
-serve               Run wsrs command with --serve option
+just load-image          Load docker image from .tar file
+just run-image           Run container
+just serve               Run wsrs command with --serve option
 
 [coverage]
-coverage            Line coverage with tarpaulin, in a container by default
+just coverage            Line coverage with tarpaulin, in a container by default
 
 [eval]
-ground-truth        Render corpus/ground-truth.toml as a table for the report
-correctness         Detection rate, false-positive rate and the rule confusion table
-scenarios           Run every evil-origin scenario, fetching off and on
-latency             Per-input latency against input size
-phases              Split each input into read, sniff and rewrite
-memory              Peak resident set per input, one process each
-bench               Throughput against worker count, fetching off and on
-plots               Draw every chart under eval/plots
-evaluate            Everything above except the benchmark
+just ground-truth        Render corpus/ground-truth.toml as a table for the report
+just correctness         Detection rate, false-positive rate and the rule confusion table
+just scenarios           Run every evil-origin scenario, fetching off and on
+just latency             Per-input latency against input size
+just phases              Split each input into read, sniff and rewrite
+just memory              Peak resident set per input, one process each
+just bench               Throughput against worker count, fetching off and on
+just plots               Draw every chart under eval/plots
+just evaluate            Everything above except the benchmark
 ```
 
 ### Corpus

@@ -2,9 +2,7 @@
 /target
 
 # Docs
-/doc/requirements
-/doc/spec
-/doc/gen
+/doc
 
 # Scenarios
 /scenarios/evil-origin.tar
