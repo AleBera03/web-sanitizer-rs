@@ -2,8 +2,7 @@
 
 ## 3.1 The pipeline
 
-Every input, regardless of source, goes through the same five-stage pipeline,
-implemented in `src/engine/mod.rs` and `src/engine/route.rs`:
+Every input, regardless of source, goes through the same five-stage pipeline, implemented in `src/engine/mod.rs` and `src/engine/route.rs`:
 
 ```mermaid
 flowchart 

@@ -6,7 +6,7 @@
 The tool takes files, directories, or `http(s)` URLs as input (through API), runs each one through a fixed pipeline, with multiple threads if more than one file is present (and multi threading is possible), and returns both the sanitised bytes and a structured JSON report describing exactly which rules fired, where, and why.
 
 The main goal of this project is to provide a basic but efficient defence against common malicious attacks, including dangerous html constructs, suspicious URLs, sub-resource manipulation, and other.
-Each file is thouroughly sniffed to find the real contents, and enforces customizable rules for each file type.
+Each file is thoroughly sniffed to find the real contents, and enforces customizable rules for each file type.
 
 ## 1.2 Goals of this report
 
