@@ -17,7 +17,7 @@ Every sample is documented in `corpus/ground-truth.toml`: where it came from, it
 | `Detected` | (malicious only) the sample reached an accepted status, every required rule fired, and no forbidden byte marker survived in the output |
 | `Mislabelled` | (malicious only) the attack was neutralised (no leak, accepted status) but not by the rule the ground truth expected |
 | `Missed` | (malicious only) neutralised but a required rule never fired, and nothing leaked |
-| `Leaked` | (malicious only) a forbidden byte marker is literally still present in the sanitised output |
+| `Leaked` | (malicious only) a forbidden byte marker is still present in the sanitised output |
 | `Clean` | (benign only) no unexpected/forbidden rule fired and no marker that should have survived was lost |
 | `FalsePositive` | (benign only) either an unjustified rule fired, or content the sample explicitly expected to survive was removed |
 
@@ -58,7 +58,7 @@ Since JavaScript sub-resources are routed to the active-content scanner rather t
 ![Phase breakdown, malicious corpus](../img/phase-breakdown-malicious.png)
 
 The malicious-corpus version of the same chart tells a sharper story: **`site-release.zip` costs roughly 175,000 µs/KiB, over 1000 times every other sample in the set**, which is otherwise not even visible on the same linear scale.
-There's no clear explanation to why the zip takes so long, as it should be immediately be refused once the ratio is considered exceeded, but this could also be caused by the cost of reading the central directory, compared also to the small size of zip files.
+There's no clear explanation to why the zip takes so long, as it should be immediately refused once the ratio is considered exceeded, but this could also be caused by the cost of reading the central directory, compared also to the small size of zip files.
 
 ### 5.2.3 The cost of sub-resource fetching
 
@@ -116,4 +116,4 @@ The much longer duration of malformed is probably due to the sanitiser handling 
 | Correctness | Detection/false-positive rate on a labelled corpus | **90.2% overall** (37/41); 8/10 categories at 100%, `css` (60%) and `xss` (84.6%) below |
 | Performance | Throughput/latency vs. input size | Close to linear on a log-log plot; fetching adds 2-3 orders of magnitude of latency at matched size |
 | Scalability | Speed-up curves vs. worker count | Sub-linear past 2 workers on both sets; fetch scales better than no-fetch past 6-8 workers, plausibly from I/O-wait overlap |
-| Resource usage | Peak memory vs. zero-copy design | 9.5-14.5 MiB across the corpus's size range; growth present but modest, and hard to separate from fixed per-process baseline at these input sizes |
+| Resource usage | Peak memory vs. zero-copy design | 9.5-14.5 MiB across the corpus's size range; growth present but modest, and hard to separate from fixed per-process baseline |

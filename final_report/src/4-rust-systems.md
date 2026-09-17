@@ -1,7 +1,6 @@
 # Rust System-Programming Aspects
 
-This chapter talks about the concurrency model, use of lifetimes, error-handling discipline, and
-the project's stance on `unsafe`.
+This chapter talks about the concurrency model, use of lifetimes, error-handling discipline, and the project's stance on `unsafe`.
 
 ## 4.1 Concurrency model
 
@@ -11,7 +10,7 @@ Each input's processing is CPU/IO-bound in short, independent bursts (parse, san
 
 ### 4.1.1 The worker pool
 
-`Engine::process_batch` (`src/engine/mod.rs`) sets up two channels — a job channel (`(usize, InputSource)`) and a result channel (`(usize, Outcome)`) — and spawns `jobs.max(1)` OS threads, each looping on:
+`Engine::process_batch` (`src/engine/mod.rs`) sets up two channels: a job channel `(usize, InputSource)` and a result channel `(usize, Outcome)`, and spawns `jobs.max(1)` OS threads, each looping on:
 
 ```rust
 loop {
@@ -145,7 +144,7 @@ This creates a split: typed errors (`thiserror`) inside the library where caller
 ### 4.3.3 Panic isolation as a last line of defence
 
 `Engine::process_indexed` wraps the whole per-input pipeline in `catch_unwind(AssertUnwindSafe(...))`. This is to avoid a bug (an unexpected panic or other) taking down a whole batch run.
-Combined with the worker-local ownership, a caught panic in one worker's input cannot corrupt shared state, the `Arc`s it read are still valid, and the panic unwound only its own stack frame.
+Combined with the worker-local ownership, a caught panic in one worker's input cannot corrupt shared state, the `Arc` it read are still valid, and the panic unwound only its own stack frame.
 
 `catch_unwind` requires its closure to be `UnwindSafe`, a marker trait that says no reference captured by this closure will be observed in a torn, inconsistent state if we unwind through it and keep going.
 The engine's per-input state does not actually satisfy this automatically (interior mutability like `RefCell`/`Cell` is not `UnwindSafe` by default), so the code asserts the safety manually.

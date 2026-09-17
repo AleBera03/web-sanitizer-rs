@@ -42,7 +42,7 @@ Three things combine to produce it:
 2. With Docker Desktop's `networkingMode=mirrored` set, a published port is claimed on both address families but only actually served over IPv4, and a connection attempt to `[::1]:<port>` is silently black-holed rather than refused, so the client waits out a full connect timeout instead of failing over immediately.
 3. `ureq` tries resolved addresses in sequence and splits its connect budget geometrically across them, with two candidate addresses, the dead `::1` consumes roughly two-thirds of the configured `connect_timeout_ms` before the client moves on to the working `127.0.0.1` address.
 
-The documented fix is to leave `networkingMode` unset in `%USERPROFILE%\.wslconfig`  rather than to change anything in the sanitiser or its policy; as a safety net, it's also recommended to additionally set a short `connect_timeout_ms = 450`.
+The documented fix is to leave `networkingMode` unset in `%USERPROFILE%\.wslconfig` rather than to change anything in the sanitiser or its policy. As a safety net, it's also recommended to additionally set a short `connect_timeout_ms = 450`.
 Linux and macOS are unaffected.
 
 ## 6.6 Possible extensions
@@ -54,4 +54,4 @@ Two extensions have been discussed:
   Publishing to `apt` and Homebrew would make the tool installable the way most comparable CLI security tools are, without requiring a Rust toolchain on the user's machine.
 2. **A reusable GitHub Action for CI-scanner embedding.**
   The original specification frames one use case as embedding into CI scanners, and the tool's CLI/library split already supports that use case mechanically, but there is currently no published, reusable GitHub Action wrapping it.
-  Packaging the CLI as a composite or Docker-based Action would let another project's CI pipeline run this sanitiser as a scanning step without vendoring or building it themselves.
+  Packaging the CLI as a composite or Docker-based Action would let another project's CI pipeline run this sanitiser as a scanning step without building it themselves.
