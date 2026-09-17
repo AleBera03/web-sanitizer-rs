@@ -44,7 +44,7 @@ We can state thanks to this that the success rate was **90.2% overall, with `css
 
 Measured with `cargo xtask latency`: one worker, median of 5 repeats, fetching off.
 The relationship is close to linear on a log-log plot across nearly four orders of magnitude of input size (hundreds of bytes to low megabytes).
-Benign and malicious latency track each other closely at matched sizes, with one visible outlier: a malicious sample around 700 bytes takes roughly 130ms, almost certainly the `site-release.zip` DoS sample, whose cost is dominated by decompression work bounded by `ZipBudgets` rather than by its compressed size.
+Benign and malicious latency track each other closely at matched sizes, with one visible outlier: a malicious sample around 700 bytes takes roughly 130ms.
 
 ### 5.2.2 Where the time goes
 
@@ -58,7 +58,7 @@ Since JavaScript sub-resources are routed to the active-content scanner rather t
 ![Phase breakdown, malicious corpus](../img/phase-breakdown-malicious.png)
 
 The malicious-corpus version of the same chart tells a sharper story: **`site-release.zip` costs roughly 175,000 µs/KiB, over 1000 times every other sample in the set**, which is otherwise not even visible on the same linear scale.
-The sanitiser, when faced with a zip, it spends bounded CPU time inflating up to the configured `max_compression_ratio` ceiling before the budget check fires and the input is refused, and this chart shows exactly that CPU cost when handling zip files.
+There's no clear explanation to why the zip takes so long, as it should be immediately be refused once the ratio is considered exceeded, but this could also be caused by the cost of reading the central directory, compared also to the small size of zip files.
 
 ### 5.2.3 The cost of sub-resource fetching
 
@@ -114,6 +114,6 @@ The much longer duration of malformed is probably due to the sanitiser handling 
 | Axis | Spec requirement | Result |
 | --- | --- | --- |
 | Correctness | Detection/false-positive rate on a labelled corpus | **90.2% overall** (37/41); 8/10 categories at 100%, `css` (60%) and `xss` (84.6%) below |
-| Performance | Throughput/latency vs. input size | Close to linear on a log-log plot; fetching adds 2-3 orders of magnitude of latency at matched size; zip-bomb sample isolated as the one clear outlier, consistent with budget design |
+| Performance | Throughput/latency vs. input size | Close to linear on a log-log plot; fetching adds 2-3 orders of magnitude of latency at matched size |
 | Scalability | Speed-up curves vs. worker count | Sub-linear past 2 workers on both sets; fetch scales better than no-fetch past 6-8 workers, plausibly from I/O-wait overlap |
 | Resource usage | Peak memory vs. zero-copy design | 9.5-14.5 MiB across the corpus's size range; growth present but modest, and hard to separate from fixed per-process baseline at these input sizes |
