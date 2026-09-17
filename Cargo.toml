@@ -6,6 +6,7 @@ name = "web-sanitizer-rs"
 version = "0.1.0"
 edition = "2024"
 exclude = ["final_report/"]
+repository = "https://github.com/AleBera03/web-sanitizer-rs"
 
 [lib]
 name = "web_sanitizer"
@@ -42,3 +43,8 @@ criterion = "0.5"
 [[bench]]
 name = "throughput"
 harness = false
+
+# The profile that 'dist' will build with
+[profile.dist]
+inherits = "release"
+lto = "thin"

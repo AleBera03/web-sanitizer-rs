@@ -3,12 +3,13 @@
 ## Development
 
 ### Dependencies
+- rust dev environment via [rustup](https://rust-lang.org/tools/install/)
 - [docker](https://docs.docker.com/get-started/get-docker/)
 
 The project uses [just](https://github.com/casey/just#Installation). Installing it using `cargo` is recommend
 
 ```
-cargo install just
+cargo install just --locked
 ```
 
 
@@ -39,6 +40,12 @@ just bench               Throughput against worker count, fetching off and on
 just plots               Draw every chart under eval/plots
 just evaluate            Everything above except the benchmark
 ```
+
+To modify deployment methods it is possible to use [cargo-dist](https://github.com/axodotdev/cargo-dist). Install it with
+```
+cargo install cargo-dist --locked
+```
+and edit `dist-workspace.toml`
 
 ### Corpus
 
@@ -146,3 +153,18 @@ That path only works where tarpaulin does, x86-64 Linux for the default ptrace e
 cargo install --locked cargo-tarpaulin
 just coverage --local
 ```
+
+### Deployment
+
+This project share compiled binaries via Github Releases.
+
+Before any PRs on main publish a new tag
+
+```
+git commit -am "release: x.x.x"
+git tag "vx.x.x"
+git push
+git push --tags
+```
+
+Then, the `cargo-dist` generated CI workflow starts a new job which compiles against several platforms and saves them on releases page.
