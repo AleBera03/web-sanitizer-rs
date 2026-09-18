@@ -74,3 +74,84 @@ fn strip_from_dict(dict: &mut Dictionary) {
         strip_dangerous_keys(value);
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use lopdf::{Document, Object, dictionary};
+
+    fn pdf_document_with_dangerous_keys() -> Vec<u8> {
+        let mut doc = Document::with_version("1.7");
+        let root_id = doc.add_object(dictionary! {
+            "Type" => "Catalog",
+            "OpenAction" => dictionary! {
+                "S" => "JavaScript",
+                "JS" => Object::string_literal("app.alert('hi');"),
+            },
+            "Names" => Object::Array(vec![
+                Object::Dictionary(dictionary! {
+                    "AA" => dictionary! { "Type" => "Action" },
+                })
+            ]),
+        });
+        doc.trailer.set("Root", root_id);
+
+        let mut data = Vec::new();
+        doc.save_to(&mut data).unwrap();
+        data
+    }
+
+    fn pdf_document_without_dangerous_keys() -> Vec<u8> {
+        let mut doc = Document::with_version("1.7");
+        let root_id = doc.add_object(dictionary! {
+            "Type" => "Catalog",
+            "Title" => "clean",
+            "Pages" => dictionary! {
+                "Count" => 0,
+                "Kids" => Object::Array(vec![]),
+            },
+        });
+        doc.trailer.set("Root", root_id);
+
+        let mut data = Vec::new();
+        doc.save_to(&mut data).unwrap();
+        data
+    }
+
+    #[test]
+    fn pdf_has_active_content_detects_dangerous_keys() {
+        let data = pdf_document_with_dangerous_keys();
+
+        assert_eq!(pdf_has_active_content(&data), Some(0));
+    }
+
+    #[test]
+    fn pdf_has_active_content_returns_none_for_clean_pdf() {
+        let data = pdf_document_without_dangerous_keys();
+
+        assert_eq!(pdf_has_active_content(&data), None);
+    }
+
+    #[test]
+    fn sanitize_pdf_removes_dangerous_keys_and_preserves_valid_pdf() {
+        let data = pdf_document_with_dangerous_keys();
+
+        let sanitized = sanitize_pdf(&data).expect("valid pdf should sanitize");
+
+        assert_eq!(pdf_has_active_content(&sanitized), None);
+        let doc = Document::load_mem(&sanitized).expect("sanitized pdf should still parse");
+        assert!(
+            !doc.objects
+                .values()
+                .any(|obj| object_has_dangerous_keys(obj))
+        );
+    }
+
+    #[test]
+    fn malformed_or_non_pdf_input_is_rejected() {
+        let invalid = b"not a pdf";
+
+        assert_eq!(pdf_has_active_content(invalid), None);
+        assert_eq!(sanitize_pdf(invalid), None);
+    }
+}
