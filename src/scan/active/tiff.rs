@@ -107,21 +107,19 @@ mod tests {
     use super::*;
 
     // ---- fixture builder -----------------------------------------------
-    fn ifd_bytes_le(entry_count: u16, next_ifd_offset: u32) -> Vec<u8> {
+    fn ifd_bytes(entry_count: u16, next_ifd_offset: u32, little_endian: bool) -> Vec<u8> {
         let mut ifd = Vec::new();
-        ifd.extend_from_slice(&entry_count.to_le_bytes());
-        ifd.extend(std::iter::repeat(0u8).take(entry_count as usize * TIFF_ENTRY_LEN));
-        ifd.extend_from_slice(&next_ifd_offset.to_le_bytes());
+
+        if little_endian {
+            ifd.extend_from_slice(&entry_count.to_le_bytes());
+            ifd.extend_from_slice(&next_ifd_offset.to_le_bytes());
+        } else {
+            ifd.extend_from_slice(&entry_count.to_be_bytes());
+            ifd.extend_from_slice(&next_ifd_offset.to_be_bytes());
+        }
+
         ifd
     }
-
-    fn ifd_bytes_be(entry_count: u16, next_ifd_offset: u32) -> Vec<u8> {
-    let mut ifd = Vec::new();
-    ifd.extend_from_slice(&entry_count.to_be_bytes());
-    ifd.extend(std::iter::repeat(0u8).take(entry_count as usize * TIFF_ENTRY_LEN));
-    ifd.extend_from_slice(&next_ifd_offset.to_be_bytes());
-    ifd
-}
 
     fn tiff_header_le(first_ifd_offset: u32) -> Vec<u8> {
         let mut h = Vec::new();
@@ -142,14 +140,14 @@ mod tests {
     #[test]
     fn tiff_little_endian_with_no_structural_risk_returns_none() {
         let mut data = tiff_header_le(0);
-        data.extend(ifd_bytes_le(0, 0));
+        data.extend(ifd_bytes(0, 0, true));
         assert_eq!(tiff_has_structural_risk(&data), None);
     }
 
     #[test]
     fn tiff_big_endian_with_no_structural_risk_returns_none() {
         let mut data = tiff_header_be(0);
-        data.extend(ifd_bytes_be(0, 4));
+        data.extend(ifd_bytes(0, 4, false));
         assert_eq!(tiff_has_structural_risk(&data), None);
     }
 
@@ -168,7 +166,7 @@ mod tests {
     #[test]
     fn tiff_le_with_cycles_returns_offset() {
         let mut data = tiff_header_le(8);
-        data.extend(ifd_bytes_le(0, 8));
+        data.extend(ifd_bytes(0, 8, true));
         assert_eq!(tiff_has_structural_risk(&data), Some(8));
     }
 
@@ -202,7 +200,7 @@ mod tests {
     #[test]
     fn tiff_be_with_cycles_returns_offset() {
         let mut data = tiff_header_be(8);
-        data.extend(ifd_bytes_be(0, 8));
+        data.extend(ifd_bytes(0, 8, false));
         assert_eq!(tiff_has_structural_risk(&data), Some(8));
     }
 

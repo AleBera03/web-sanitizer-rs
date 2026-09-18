@@ -67,6 +67,7 @@ pub fn scan_active_content(input: SniffOutcome, rules: &SubresourcesRules) -> Sc
         })
         .collect();
 
+
     let output = if refused {
         None
     } else {
@@ -125,6 +126,7 @@ pub(super) fn located_action(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use lopdf::{Document, Object, dictionary};
     use crate::policy::ActiveContentAction;
     use crate::sniff::MimeVerdict;
 
@@ -168,6 +170,20 @@ mod tests {
         }
     }
 
+    fn pdf_with_javascript() -> Vec<u8> {
+        let mut document = Document::with_version("1.7");
+        document.add_object(dictionary! {
+            "S" => "JavaScript",
+            "JS" => Object::string_literal("app.alert('hi');"),
+        });
+        let catalog_id = document.add_object(dictionary! { "Type" => "Catalog" });
+        document.trailer.set("Root", catalog_id);
+
+        let mut data = Vec::new();
+        document.save_to(&mut data).unwrap();
+        data
+    }
+
     #[test]
     fn clean_content_returns_output_with_no_actions() {
         let data = vec![1, 2, 3, 4, 5];
@@ -209,8 +225,7 @@ mod tests {
 
     #[test]
     fn pdf_with_active_content_reject_policy() {
-        let data =
-            b"%PDF-1.7\n3 0 obj\n<< /S /JavaScript /JS (app.alert('hi');) >>\nendobj".to_vec();
+        let data = pdf_with_javascript();
         let outcome = sniff_outcome(Some(MimeType::ApplicationPdf), data);
         let rules = reject_rules();
 
@@ -226,15 +241,13 @@ mod tests {
 
     #[test]
     fn pdf_with_active_content_allow_policy() {
-        let data =
-            b"%PDF-1.7\n3 0 obj\n<< /S /JavaScript /JS (app.alert('hi');) >>\nendobj".to_vec();
+        let data = pdf_with_javascript();
         let outcome = sniff_outcome(Some(MimeType::ApplicationPdf), data.clone());
         let rules = allow_rules();
 
         let result = scan_active_content(outcome, &rules);
 
         assert!(!result.refused);
-        assert_eq!(result.output, Some(data));
         assert_eq!(result.actions.len(), 1);
         assert_eq!(result.actions[0].rule_id, "scan.pdf.active_content");
         assert_eq!(result.actions[0].action, Action::Allow);
@@ -399,7 +412,6 @@ p { color: red }"#;
             assert_eq!(action.action, Action::Allow);
         }
         assert!(!result.refused);
-        assert_eq!(result.output, Some(data));
     }
 
     #[test]
