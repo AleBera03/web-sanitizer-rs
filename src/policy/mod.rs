@@ -261,7 +261,6 @@ pub enum SubresourceType {
 /// project brief calls it optional, and optional means the user asks for it.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
-
 pub struct SubresourcesRules {
     pub fetch_subresources: bool,
     /// Zero disables the loop entirely. Any other value fetches at depth 1

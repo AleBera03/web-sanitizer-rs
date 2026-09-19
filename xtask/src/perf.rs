@@ -178,10 +178,8 @@ pub fn phases(
             read_us.push(started.elapsed().as_micros());
 
             let started = Instant::now();
-            let acquired = AcquiredInput::new(
-                web_sanitizer::input::InputSource::File(path.clone()),
-                bytes,
-            );
+            let acquired =
+                AcquiredInput::new(web_sanitizer::input::InputSource::File(path.clone()), bytes);
             let _ = sniff_input(acquired, &policy.subresources, 0);
             sniff_us.push(started.elapsed().as_micros());
 
@@ -209,7 +207,6 @@ pub fn phases(
     rows.sort_by_key(|row| row.bytes);
     Ok((rows, progress))
 }
-
 
 #[cfg(target_os = "linux")]
 fn peak_rss_kib() -> u64 {
@@ -387,10 +384,10 @@ pub fn machine_notes() -> Vec<String> {
             text.lines().filter(|l| l.starts_with("processor")).count()
         ));
     }
-    if let Ok(text) = std::fs::read_to_string("/proc/meminfo") {
-        if let Some(line) = text.lines().find(|line| line.starts_with("MemTotal")) {
-            notes.push(line.trim().to_string());
-        }
+    if let Ok(text) = std::fs::read_to_string("/proc/meminfo")
+        && let Some(line) = text.lines().find(|line| line.starts_with("MemTotal"))
+    {
+        notes.push(line.trim().to_string());
     }
     notes
 }

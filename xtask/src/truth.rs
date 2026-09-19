@@ -129,7 +129,10 @@ impl GroundTruth {
     }
 
     // the statuses and rules that hold for one sample in one fetching mode
-    pub fn expectation(sample: &Sample, fetching: bool) -> (Vec<String>, Vec<String>, Vec<String>, Vec<String>) {
+    pub fn expectation(
+        sample: &Sample,
+        fetching: bool,
+    ) -> (Vec<String>, Vec<String>, Vec<String>, Vec<String>) {
         let extra = match fetching {
             true => sample.fetch.clone().unwrap_or_default(),
             false => FetchExpectation::default(),
@@ -333,7 +336,9 @@ mod tests {
 
     #[test]
     fn an_unknown_name_is_an_error_that_names_it() {
-        let error = truth().find(SampleSet::Malicious, "not-in-the-corpus.html").unwrap_err();
+        let error = truth()
+            .find(SampleSet::Malicious, "not-in-the-corpus.html")
+            .unwrap_err();
         assert!(error.to_string().contains("not-in-the-corpus.html"));
     }
 }

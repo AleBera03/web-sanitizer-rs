@@ -545,7 +545,12 @@ pub fn scaling(layout: &Layout, run: &Run) -> Result<Option<PathBuf>> {
             &format!("one batch of the set \u{2014} {}", run.conditions()),
         ))
         .legend(Legend::new().top("9%"))
-        .x_axis(Axis::new().type_(AxisType::Category).name("workers").data(labels))
+        .x_axis(
+            Axis::new()
+                .type_(AxisType::Category)
+                .name("workers")
+                .data(labels),
+        )
         .y_axis(value_axis("speed-up", false))
         .series(
             Line::new()
@@ -609,15 +614,20 @@ fn pair_file(layout: &Layout, set: SampleSet, plot: &str, a: &Run, b: &Run) -> P
         .join(format!("{}-vs-{}.png", a.slug, b.slug))
 }
 
+// what a scatter comparison is called and how its y axis reads
+struct PairPlot {
+    plot: &'static str,
+    heading: &'static str,
+    subtext: &'static str,
+    y_axis: &'static str,
+    logarithmic: bool,
+}
+
 fn scatter_pair(
     layout: &Layout,
     a: &Run,
     b: &Run,
-    plot: &str,
-    heading: &str,
-    subtext: &str,
-    y_axis: &str,
-    logarithmic: bool,
+    spec: PairPlot,
     values: impl Fn(&Run) -> Option<Vec<(f64, f64)>>,
 ) -> Result<Option<PathBuf>> {
     let (Some(first), Some(second)) = (values(a), values(b)) else {
@@ -628,22 +638,26 @@ fn scatter_pair(
     }
     let mut chart = canvas()
         .title(title(
-            heading,
-            &format!("{subtext} \u{2014} {} against {}", a.slug, b.slug),
+            spec.heading,
+            &format!("{} \u{2014} {} against {}", spec.subtext, a.slug, b.slug),
         ))
         .legend(Legend::new().top("9%"))
         .x_axis(value_axis("input bytes", true))
-        .y_axis(value_axis(y_axis, logarithmic));
+        .y_axis(value_axis(spec.y_axis, spec.logarithmic));
     for (index, (run, data)) in [(a, first), (b, second)].into_iter().enumerate() {
         chart = chart.series(
             Scatter::new()
                 .name(run.slug.clone())
                 .symbol_size(SymbolSize::Number(9.0))
                 .item_style(series_colour(index))
-                .data(data.into_iter().map(|(x, y)| point(x, y)).collect::<Vec<DataPoint>>()),
+                .data(
+                    data.into_iter()
+                        .map(|(x, y)| point(x, y))
+                        .collect::<Vec<DataPoint>>(),
+                ),
         );
     }
-    let path = pair_file(layout, a.set, plot, a, b);
+    let path = pair_file(layout, a.set, spec.plot, a, b);
     render(chart, &path)?;
     Ok(Some(path))
 }
@@ -653,11 +667,13 @@ pub fn compare_latency(layout: &Layout, a: &Run, b: &Run) -> Result<Option<PathB
         layout,
         a,
         b,
-        "latency",
-        "Per-input latency against input size",
-        "one worker, median of the repeats, both axes logarithmic",
-        "microseconds",
-        true,
+        PairPlot {
+            plot: "latency",
+            heading: "Per-input latency against input size",
+            subtext: "one worker, median of the repeats, both axes logarithmic",
+            y_axis: "microseconds",
+            logarithmic: true,
+        },
         |run| {
             run.table::<LatencyRow>("latency.csv").map(|rows| {
                 rows.iter()
@@ -674,11 +690,13 @@ pub fn compare_memory(layout: &Layout, a: &Run, b: &Run) -> Result<Option<PathBu
         layout,
         a,
         b,
-        "memory",
-        "Peak resident set against input size",
-        "one process per input, high-water mark read from the kernel",
-        "peak RSS, KiB",
-        false,
+        PairPlot {
+            plot: "memory",
+            heading: "Peak resident set against input size",
+            subtext: "one process per input, high-water mark read from the kernel",
+            y_axis: "peak RSS, KiB",
+            logarithmic: false,
+        },
         |run| {
             run.table::<MemoryRow>("memory.csv").map(|rows| {
                 rows.iter()
@@ -695,11 +713,13 @@ pub fn compare_phases(layout: &Layout, a: &Run, b: &Run) -> Result<Option<PathBu
         layout,
         a,
         b,
-        "phases",
-        "Total pipeline cost per kibibyte",
-        "read, sniff and rewrite summed, divided by the input size",
-        "us per KiB",
-        true,
+        PairPlot {
+            plot: "phases",
+            heading: "Total pipeline cost per kibibyte",
+            subtext: "read, sniff and rewrite summed, divided by the input size",
+            y_axis: "us per KiB",
+            logarithmic: true,
+        },
         |run| {
             run.table::<PhaseRow>("phases.csv").map(|rows| {
                 rows.iter()
@@ -748,11 +768,7 @@ pub fn compare_rates(layout: &Layout, a: &Run, b: &Run) -> Result<Option<PathBuf
         ))
         .legend(Legend::new().top("75"))
         .x_axis(value_axis("count", false))
-        .y_axis(
-            Axis::new()
-                .type_(AxisType::Category)
-                .data(names.clone()),
-        );
+        .y_axis(Axis::new().type_(AxisType::Category).data(names.clone()));
     for (index, (run, rows)) in [(a, &left), (b, &right)].into_iter().enumerate() {
         let data: Vec<DataPoint> = names
             .iter()
@@ -782,7 +798,10 @@ pub fn compare_scaling(layout: &Layout, a: &Run, b: &Run) -> Result<Option<PathB
     let mut chart = canvas()
         .title(title(
             "Speed-up against worker count",
-            &format!("one batch of the set \u{2014} {} against {}", a.slug, b.slug),
+            &format!(
+                "one batch of the set \u{2014} {} against {}",
+                a.slug, b.slug
+            ),
         ))
         .legend(Legend::new().top("9%"))
         .x_axis(
@@ -1006,7 +1025,10 @@ mod tests {
     #[test]
     fn a_pair_becomes_a_two_dimensional_point() {
         let rendered = serde_json::to_string(&point(2.0, 5.0)).unwrap();
-        assert!(rendered.contains('2') && rendered.contains('5'), "{rendered}");
+        assert!(
+            rendered.contains('2') && rendered.contains('5'),
+            "{rendered}"
+        );
     }
 
     #[test]
@@ -1155,7 +1177,11 @@ mod tests {
     fn a_pair_is_named_for_both_of_its_runs() {
         let layout = Layout::discover();
         let a = run(SampleSet::Benign, "policy-nofetch", RunKind::NoFetch);
-        let b = run(SampleSet::Benign, "permissive", RunKind::Custom("permissive".into()));
+        let b = run(
+            SampleSet::Benign,
+            "permissive",
+            RunKind::Custom("permissive".into()),
+        );
         let path = pair_file(&layout, SampleSet::Benign, "latency", &a, &b);
         assert!(
             path.ends_with("eval/plots/benign/compare/latency/policy-nofetch-vs-permissive.png"),
@@ -1167,7 +1193,11 @@ mod tests {
     #[test]
     fn a_run_with_no_tables_draws_nothing_rather_than_failing() {
         let layout = Layout::discover();
-        let missing = run(SampleSet::Benign, "absent", RunKind::Custom("absent".into()));
+        let missing = run(
+            SampleSet::Benign,
+            "absent",
+            RunKind::Custom("absent".into()),
+        );
         assert!(latency(&layout, &missing).unwrap().is_none());
         assert!(phases(&layout, &missing).unwrap().is_none());
         assert!(memory(&layout, &missing).unwrap().is_none());

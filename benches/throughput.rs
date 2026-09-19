@@ -4,10 +4,10 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
-use web_sanitizer::fixture::{FixtureServer, Resource};
 use url::Url;
 use web_sanitizer::Engine;
 use web_sanitizer::fetch::HttpFetcher;
+use web_sanitizer::fixture::{FixtureServer, Resource};
 use web_sanitizer::input::InputSource;
 use web_sanitizer::policy::Policy;
 

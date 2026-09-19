@@ -67,7 +67,6 @@ pub fn scan_active_content(input: SniffOutcome, rules: &SubresourcesRules) -> Sc
         })
         .collect();
 
-
     let output = if refused {
         None
     } else {
@@ -126,9 +125,9 @@ pub(super) fn located_action(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use lopdf::{Document, Object, dictionary};
     use crate::policy::ActiveContentAction;
     use crate::sniff::MimeVerdict;
+    use lopdf::{Document, Object, dictionary};
 
     fn default_rules() -> SubresourcesRules {
         SubresourcesRules::default()

@@ -10,10 +10,7 @@ const DANGEROUS_KEYS: &[&[u8]] = &[b"JavaScript", b"JS", b"OpenAction", b"AA", b
 /// findings), `None` if clean or unparsable as a PDF.
 pub fn pdf_has_active_content(data: &[u8]) -> Option<usize> {
     let doc = Document::load_mem(data).ok()?;
-    let has_marker = doc
-        .objects
-        .values()
-        .any(|obj| object_has_dangerous_keys(obj));
+    let has_marker = doc.objects.values().any(object_has_dangerous_keys);
     has_marker.then_some(0)
 }
 
@@ -68,7 +65,7 @@ fn strip_dangerous_keys(obj: &mut Object) {
 
 fn strip_from_dict(dict: &mut Dictionary) {
     for key in DANGEROUS_KEYS {
-        dict.remove(*key);
+        dict.remove(key);
     }
     for (_, value) in dict.iter_mut() {
         strip_dangerous_keys(value);
@@ -140,11 +137,7 @@ mod tests {
 
         assert_eq!(pdf_has_active_content(&sanitized), None);
         let doc = Document::load_mem(&sanitized).expect("sanitized pdf should still parse");
-        assert!(
-            !doc.objects
-                .values()
-                .any(|obj| object_has_dangerous_keys(obj))
-        );
+        assert!(!doc.objects.values().any(object_has_dangerous_keys));
     }
 
     #[test]

@@ -146,7 +146,7 @@ fn measure(sample: &Sample, done: &Processed, fetching: bool) -> Measured {
     let (accepted_status, required, justified, forbidden) =
         GroundTruth::expectation(sample, fetching);
     let status = done.status_label();
-    let status_ok = accepted_status.iter().any(|accepted| *accepted == status);
+    let status_ok = accepted_status.contains(&status);
     let missing: Vec<String> = required
         .iter()
         .filter(|rule| !done.fired(rule))
@@ -170,7 +170,6 @@ fn measure(sample: &Sample, done: &Processed, fetching: bool) -> Measured {
         .cloned()
         .collect();
     let output_ok = done.output.is_some() == sample.expects_output();
-    let mut unexpected = unexpected;
     if let Some(limit) = sample.max_duration_ms {
         let taken = done.elapsed.as_millis();
         if taken > limit as u128 {
@@ -576,7 +575,10 @@ mod tests {
         sample.set = SampleSet::Benign;
         sample.preserved = vec!["&lt;script".into()];
         let done = processed(InputStatus::Sanitised, &[], Some("nothing left"));
-        assert_eq!(measure(&sample, &done, false).verdict(), Verdict::FalsePositive);
+        assert_eq!(
+            measure(&sample, &done, false).verdict(),
+            Verdict::FalsePositive
+        );
     }
 
     #[test]

@@ -84,7 +84,8 @@ mod tests {
 
     #[test]
     fn sanitize_svg_removes_event_handlers() {
-        let svg = br#"<svg onload="alert(1)" xmlns="http://www.w3.org/2000/svg"><circle r="5"/></svg>"#;
+        let svg =
+            br#"<svg onload="alert(1)" xmlns="http://www.w3.org/2000/svg"><circle r="5"/></svg>"#;
 
         let sanitized = String::from_utf8(sanitize_svg(svg)).unwrap();
 

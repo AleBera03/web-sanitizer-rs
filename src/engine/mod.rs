@@ -243,8 +243,8 @@ impl Engine {
         }
 
         // Emit results in-order and assemble report
-        for index in 0..total {
-            if let Some(outcome) = outcomes[index].take() {
+        for (index, slot) in outcomes.into_iter().enumerate() {
+            if let Some(outcome) = slot {
                 emit(index, &outcome);
                 report.push(outcome.report);
             } else {

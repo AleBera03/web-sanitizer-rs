@@ -26,7 +26,12 @@ fn benign_table(truth: &GroundTruth) -> String {
             "| `{}` | {} | {} | {} | {} |\n",
             escape(&sample.name),
             origin_cell(sample),
-            escape(sample.licence.as_deref().unwrap_or("authored for this project")),
+            escape(
+                sample
+                    .licence
+                    .as_deref()
+                    .unwrap_or("authored for this project")
+            ),
             escape(sample.carries.as_deref().unwrap_or("")),
             code_list(&sample.allowed),
         ));

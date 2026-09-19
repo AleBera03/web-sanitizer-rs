@@ -200,10 +200,7 @@ mod tests {
 
     #[test]
     fn zip_with_dos_risk_returns_refuse_action() {
-        let outcome = sniff_outcome(
-            MimeType::ApplicationZip,
-            &zip_bomb_metadata(),
-        );
+        let outcome = sniff_outcome(MimeType::ApplicationZip, &zip_bomb_metadata());
         let action = scan_dos_risks(&outcome, &rules(), &budgets()).expect("expected a DOS action");
         assert_eq!(action.rule_id, "scan.zip.bomb_risk");
     }

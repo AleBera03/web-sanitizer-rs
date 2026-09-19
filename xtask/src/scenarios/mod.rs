@@ -49,7 +49,6 @@ impl Mode {
     }
 }
 
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Suite {
     Origin,
@@ -79,7 +78,6 @@ struct ScenarioList {
     scenarios: Vec<Published>,
 }
 
-
 #[derive(Debug, Clone, Deserialize)]
 struct Published {
     category: String,
@@ -98,7 +96,6 @@ impl Published {
         }
     }
 }
-
 
 #[derive(Debug, Clone)]
 pub struct Scenario {
@@ -274,10 +271,10 @@ fn judge(
     if let Some(subresources) = report.and_then(|r| r.subresources.as_ref()) {
         for sub in subresources {
             *counts.entry(sub.status.clone()).or_default() += 1;
-            if sub.status == "ssrf_blocked" {
-                if let Some(address) = sub.block.as_ref().and_then(|b| b.resolved_address.clone()) {
-                    blocked.push(address);
-                }
+            if sub.status == "ssrf_blocked"
+                && let Some(address) = sub.block.as_ref().and_then(|b| b.resolved_address.clone())
+            {
+                blocked.push(address);
             }
         }
     }
@@ -299,15 +296,15 @@ fn judge(
                 reasons.push(format!("{marker:?} survived in the output"));
             }
         }
-        if let Some(mime) = expected.sniffed {
-            if sniffed != mime {
-                reasons.push(format!("sniffed {sniffed:?}, expected {mime:?}"));
-            }
+        if let Some(mime) = expected.sniffed
+            && sniffed != mime
+        {
+            reasons.push(format!("sniffed {sniffed:?}, expected {mime:?}"));
         }
-        if let Some(limit) = expected.max_wall_ms {
-            if wall_ms > limit {
-                reasons.push(format!("took {wall_ms} ms, limit is {limit} ms"));
-            }
+        if let Some(limit) = expected.max_wall_ms
+            && wall_ms > limit
+        {
+            reasons.push(format!("took {wall_ms} ms, limit is {limit} ms"));
         }
 
         if mode == Mode::Fetch {
@@ -318,10 +315,10 @@ fn judge(
                     .map(|status| counts.get(*status).copied().unwrap_or_default())
                     .sum();
                 let attempted: usize = counts.values().sum::<usize>() - never_requested;
-                if let Some(max) = rule.max_attempted {
-                    if attempted > max {
-                        reasons.push(format!("requested {attempted} sub-resources, cap is {max}"));
-                    }
+                if let Some(max) = rule.max_attempted
+                    && attempted > max
+                {
+                    reasons.push(format!("requested {attempted} sub-resources, cap is {max}"));
                 }
                 if let Some(min) = rule.min_budget_exceeded {
                     let seen = counts.get("budget_exceeded").copied().unwrap_or_default();
@@ -343,10 +340,10 @@ fn judge(
         }
     }
 
-    if let Some(accepted) = sentinel {
-        if accepted > 0 {
-            reasons.push(format!("the sentinel accepted {accepted} connection(s)"));
-        }
+    if let Some(accepted) = sentinel
+        && accepted > 0
+    {
+        reasons.push(format!("the sentinel accepted {accepted} connection(s)"));
     }
 
     let row = ScenarioRow {
@@ -400,9 +397,14 @@ pub fn run(layout: &Layout, modes: &[Mode], options: &Options) -> Result<Vec<Sce
             };
             println!("\n== {} mode", mode.label());
             match suite {
-                Suite::Origin => {
-                    run_published(&server, &origin, *mode, &published, options.timeout, &mut rows)
-                }
+                Suite::Origin => run_published(
+                    &server,
+                    &origin,
+                    *mode,
+                    &published,
+                    options.timeout,
+                    &mut rows,
+                ),
                 Suite::Local => run_local(&server, *mode, options.timeout, &mut rows)?,
             }
         }

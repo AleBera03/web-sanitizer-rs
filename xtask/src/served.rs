@@ -58,7 +58,7 @@ pub struct Origin {
 
 impl Origin {
     pub fn start() -> Origin {
-        let server = FixtureServer::start_on(LATENCY, "localhost");
+        let server = FixtureServer::start_on(LATENCY, "127.0.0.1");
         server.fallback(by_extension);
         Origin { server }
     }
@@ -103,9 +103,10 @@ fn should_anchor(authority: &str) -> bool {
     if !host.contains('.') {
         return false;
     }
-    if host.split('.').all(|label| {
-        !label.is_empty() && label.chars().all(|c| c.is_ascii_digit())
-    }) {
+    if host
+        .split('.')
+        .all(|label| !label.is_empty() && label.chars().all(|c| c.is_ascii_digit()))
+    {
         return false;
     }
     !RESERVED.iter().any(|suffix| host.ends_with(suffix))
@@ -126,7 +127,7 @@ fn anchor(page: &str, base: &str) -> String {
         };
         let after = at + 2;
         let host_end = rest[after..]
-            .find(|c: char| c == '/' || c == '"' || c == '\'' || c == '<' || c == ' ')
+            .find(['/', '"', '\'', '<', ' '])
             .map(|i| after + i)
             .unwrap_or(rest.len());
         let authority = &rest[after..host_end];
@@ -175,7 +176,7 @@ mod tests {
         match source {
             InputSource::Url(url) => {
                 assert!(url.as_str().ends_with("/corpus/a.html"), "{url}");
-                assert_eq!(url.host_str(), Some("localhost"));
+                assert_eq!(url.host_str(), Some("127.0.0.1"));
             }
             _ => panic!("a published input is fetched by URL"),
         }
@@ -187,8 +188,14 @@ mod tests {
             "<img src=\"https://cdn.wikimedia.org/a.png\"><a href=\"http://kernel.org/b\">",
             "http://localhost:9",
         );
-        assert!(rewritten.contains("http://localhost:9/r/cdn.wikimedia.org/a.png"), "{rewritten}");
-        assert!(rewritten.contains("http://localhost:9/r/kernel.org/b"), "{rewritten}");
+        assert!(
+            rewritten.contains("http://localhost:9/r/cdn.wikimedia.org/a.png"),
+            "{rewritten}"
+        );
+        assert!(
+            rewritten.contains("http://localhost:9/r/kernel.org/b"),
+            "{rewritten}"
+        );
     }
 
     #[test]
@@ -197,8 +204,14 @@ mod tests {
             "<a href=\"https://evil.example/drop\"><a href=\"https://support@bank.example/x\">",
             "http://localhost:9",
         );
-        assert!(rewritten.contains("https://evil.example/drop"), "{rewritten}");
-        assert!(rewritten.contains("https://support@bank.example/x"), "{rewritten}");
+        assert!(
+            rewritten.contains("https://evil.example/drop"),
+            "{rewritten}"
+        );
+        assert!(
+            rewritten.contains("https://support@bank.example/x"),
+            "{rewritten}"
+        );
     }
 
     #[test]
@@ -251,14 +264,22 @@ mod tests {
 
     #[test]
     fn a_scheme_that_is_not_http_is_untouched() {
-        let rewritten = anchor("<a href=\"ftp://files.kernel.org/x\">", "http://localhost:9");
-        assert!(rewritten.contains("ftp://files.kernel.org/x"), "{rewritten}");
+        let rewritten = anchor(
+            "<a href=\"ftp://files.kernel.org/x\">",
+            "http://localhost:9",
+        );
+        assert!(
+            rewritten.contains("ftp://files.kernel.org/x"),
+            "{rewritten}"
+        );
     }
 
     #[test]
     fn a_body_that_is_not_html_is_published_untouched() {
         let origin = Origin::start();
-        let bytes = vec![0x89, b'P', b'N', b'G', b'h', b't', b't', b'p', b':', b'/', b'/'];
+        let bytes = vec![
+            0x89, b'P', b'N', b'G', b'h', b't', b't', b'p', b':', b'/', b'/',
+        ];
         let _ = origin.publish("a.png", &bytes);
         assert_eq!(content_type("a.png"), "image/png");
     }

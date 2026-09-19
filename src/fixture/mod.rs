@@ -64,10 +64,11 @@ impl FixtureServer {
     }
 
     pub fn start_on(latency: Duration, host: &str) -> FixtureServer {
-        let listener = TcpListener::bind(("::", 0))
-            .or_else(|_| TcpListener::bind("127.0.0.1:0"))
-            .expect("a loopback port is available");
-        let port = listener.local_addr().expect("the listener has an address").port();
+        let listener = TcpListener::bind((host, 0)).expect("a loopback port is available");
+        let port = listener
+            .local_addr()
+            .expect("the listener has an address")
+            .port();
         listener
             .set_nonblocking(true)
             .expect("the listener accepts a non-blocking mode");
@@ -85,6 +86,7 @@ impl FixtureServer {
             while !worker.stop.load(Ordering::Relaxed) {
                 match listener.accept() {
                     Ok((stream, _)) => {
+                        let _ = stream.set_nonblocking(false);
                         let handler = Arc::clone(&worker);
                         thread::spawn(move || serve(stream, handler));
                     }
@@ -151,7 +153,6 @@ fn serve(mut stream: TcpStream, shared: Arc<Shared>) {
     let _ = stream.write_all(&response);
     let _ = stream.flush();
 }
-
 
 fn request_path(stream: &TcpStream) -> Option<String> {
     let mut reader = BufReader::new(stream);

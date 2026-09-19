@@ -275,7 +275,7 @@ fn parser_disagreement(source: &str, tokenized: &[Finding]) -> Option<Finding> {
     SCRIPTING
         .iter()
         .any(|name| spliced.contains(name))
-        .then(|| Finding {
+        .then_some(Finding {
             rule_id: "scan.css.expression",
             line: 1,
             offset: 0,

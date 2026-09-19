@@ -1,5 +1,5 @@
-use std::io::Read;
-use std::net::TcpListener;
+use std::io::{Read, Write};
+use std::net::{TcpListener, TcpStream};
 use std::process::{Child, Command, Stdio};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -158,14 +158,23 @@ fn a_url_the_guard_refuses_answers_403_and_opens_no_connection() {
 #[test]
 fn a_body_over_the_input_budget_is_refused_before_the_engine() {
     let server = Server::start();
-    let oversized = vec![b'a'; 11 * 1024 * 1024];
+    let oversized = 10 * 1024 * 1024 + 1;
 
-    let response = agent()
-        .post(server.url("/v1/resources"))
-        .send(&oversized[..])
+    let mut stream = TcpStream::connect(("127.0.0.1", server.port)).unwrap();
+    stream
+        .set_read_timeout(Some(Duration::from_secs(10)))
         .unwrap();
+    write!(
+        stream,
+        "POST /v1/resources HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Length: {oversized}\r\nConnection: close\r\n\r\n"
+    )
+    .unwrap();
+    stream.write_all(&vec![b'a'; oversized]).unwrap();
+    let mut raw = Vec::new();
+    let _ = stream.read_to_end(&mut raw);
+    let response = String::from_utf8_lossy(&raw);
 
-    assert_eq!(response.status(), 413);
+    assert!(response.starts_with("HTTP/1.1 413"), "{response}");
 }
 
 #[test]
