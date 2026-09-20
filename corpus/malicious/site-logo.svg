@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64" role="img">
+  <script>alert(1)</script><title onload="alert(2)">Sanitiser mark</title>
+  <rect x="4" y="4" width="56" height="56" rx="10" fill="#2a78d6"/>
+  <path d="M20 33l8 8 16-18" fill="none" stroke="#fbfbf9" stroke-width="6" stroke-linecap="round"/>
+</svg>

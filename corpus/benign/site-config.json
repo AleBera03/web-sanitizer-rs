@@ -1,0 +1,11 @@
+{
+  "site": {
+    "title": "Sanitiser handbook",
+    "locale": "en-GB"
+  },
+  "limits": {
+    "maxInputBytes": 52428800,
+    "maxRequests": 32
+  },
+  "features": ["sniffing", "scanning", "rewriting"]
+}

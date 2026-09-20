@@ -1,1 +1,12 @@
+# Rust
 /target
+
+# Docs
+/doc
+
+# Scenarios
+/scenarios/evil-origin.tar
+/scenarios/evil-origin.zip
+
+# Eval outputs
+/eval

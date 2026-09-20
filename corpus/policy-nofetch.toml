@@ -1,0 +1,10 @@
+# corpus evaluation, sub-resource fetching off
+[ssrf]
+guard_input_urls = "never"
+
+[subresources]
+fetch_subresources = false
+
+[urls]
+blocklists = ["corpus/malicious/blocklist.txt"]
+protected_domains = ["google.com", "apple.com", "paypal.com", "microsoft.com", "amazon.com"]

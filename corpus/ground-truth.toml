@@ -1,0 +1,1106 @@
+[corpus]
+benign_dir = "corpus/benign"
+malicious_dir = "corpus/malicious"
+policy_nofetch = "corpus/policy-nofetch.toml"
+policy_fetch = "corpus/policy-fetch.toml"
+
+[[sample]]
+name = "wikipedia-html-sanitization.html"
+set = "benign"
+category = "encyclopedia"
+source = "https://en.wikipedia.org/wiki/HTML_sanitization"
+licence = "CC BY-SA 4.0"
+carries = "site scripts, escaped markup examples inside code blocks"
+status = ["sanitised"]
+rules = []
+allowed = ["html.script.disallowed"]
+preserved = ["&lt;", "sanitization"]
+
+[sample.fetch]
+allowed = ["subresource.budget_exceeded", "subresource.refused", "subresource.ssrf_blocked", "sniff.mime_mismatch"]
+
+[[sample]]
+name = "wikipedia-http-status-codes.html"
+set = "benign"
+category = "encyclopedia"
+source = "https://en.wikipedia.org/wiki/List_of_HTTP_status_codes"
+licence = "CC BY-SA 4.0"
+carries = "site scripts, very large tables"
+status = ["sanitised"]
+rules = []
+allowed = ["html.script.disallowed"]
+
+[sample.fetch]
+allowed = ["subresource.budget_exceeded", "subresource.refused", "subresource.ssrf_blocked", "sniff.mime_mismatch"]
+
+[[sample]]
+name = "wikipedia-tokyo-ja.html"
+set = "benign"
+category = "encyclopedia"
+source = "https://ja.wikipedia.org/wiki/東京都"
+licence = "CC BY-SA 4.0"
+carries = "site scripts, Japanese text throughout"
+status = ["sanitised"]
+rules = []
+allowed = ["html.script.disallowed"]
+
+[sample.fetch]
+allowed = ["subresource.budget_exceeded", "subresource.refused", "subresource.ssrf_blocked", "sniff.mime_mismatch"]
+
+[[sample]]
+name = "wikipedia-cairo-ar.html"
+set = "benign"
+category = "encyclopedia"
+source = "https://ar.wikipedia.org/wiki/القاهرة"
+licence = "CC BY-SA 4.0"
+carries = "site scripts, right-to-left text, two external links written with an explicit default port"
+status = ["sanitised"]
+rules = []
+allowed = ["html.script.disallowed", "url.normalised"]
+
+[sample.fetch]
+allowed = ["subresource.budget_exceeded", "subresource.refused", "subresource.ssrf_blocked", "sniff.mime_mismatch"]
+
+[[sample]]
+name = "wikipedia-athens-el.html"
+set = "benign"
+category = "encyclopedia"
+source = "https://el.wikipedia.org/wiki/Αθήνα"
+licence = "CC BY-SA 4.0"
+carries = "site scripts, Greek text throughout"
+status = ["sanitised"]
+rules = []
+allowed = ["html.script.disallowed"]
+
+[sample.fetch]
+allowed = ["subresource.budget_exceeded", "subresource.refused", "subresource.ssrf_blocked", "sniff.mime_mismatch"]
+
+[[sample]]
+name = "wikipedia-petersburg-ru.html"
+set = "benign"
+category = "encyclopedia"
+source = "https://ru.wikipedia.org/wiki/Санкт-Петербург"
+licence = "CC BY-SA 4.0"
+carries = "site scripts, Cyrillic text, one genuine Cyrillic internationalised domain that is nobody's look-alike"
+status = ["sanitised"]
+rules = []
+allowed = ["html.script.disallowed", "url.idn"]
+
+[sample.fetch]
+allowed = ["subresource.budget_exceeded", "subresource.refused", "subresource.ssrf_blocked", "sniff.mime_mismatch"]
+
+[[sample]]
+name = "mdn-iframe.html"
+set = "benign"
+category = "web-documentation"
+source = "https://developer.mozilla.org/en-US/docs/Web/HTML/Reference/Elements/iframe"
+licence = "CC BY-SA 2.5"
+carries = "site scripts, live examples in real iframes, escaped iframe markup in code blocks"
+status = ["sanitised"]
+rules = []
+allowed = ["html.script.disallowed", "html.frame.disallowed"]
+preserved = ["&lt;iframe"]
+
+[sample.fetch]
+allowed = ["subresource.budget_exceeded", "subresource.refused", "subresource.ssrf_blocked", "sniff.mime_mismatch"]
+
+[[sample]]
+name = "mdn-script-element.html"
+set = "benign"
+category = "web-documentation"
+source = "https://developer.mozilla.org/en-US/docs/Web/HTML/Reference/Elements/script"
+licence = "CC BY-SA 2.5"
+carries = "site scripts and many escaped script examples in code blocks"
+status = ["sanitised"]
+rules = []
+allowed = ["html.script.disallowed"]
+preserved = ["&lt;script"]
+
+[sample.fetch]
+allowed = ["subresource.budget_exceeded", "subresource.refused", "subresource.ssrf_blocked", "sniff.mime_mismatch"]
+
+[[sample]]
+name = "mdn-xss.html"
+set = "benign"
+category = "web-documentation"
+source = "https://developer.mozilla.org/en-US/docs/Web/Security/Attacks/XSS"
+licence = "CC BY-SA 2.5"
+carries = "site scripts and escaped attack payloads quoted as documentation"
+status = ["sanitised"]
+rules = []
+allowed = ["html.script.disallowed"]
+preserved = ["&lt;script", "onerror"]
+
+[sample.fetch]
+allowed = ["subresource.budget_exceeded", "subresource.refused", "subresource.ssrf_blocked", "sniff.mime_mismatch"]
+
+[[sample]]
+name = "rfc9110-http-semantics.html"
+set = "benign"
+category = "specification"
+source = "https://www.rfc-editor.org/rfc/rfc9110.html"
+licence = "IETF Trust, RFC 9110 legal provisions"
+carries = "two small scripts and one inline handler on the table of contents"
+status = ["sanitised"]
+rules = []
+allowed = ["html.script.disallowed", "html.attr.event_handler"]
+
+[sample.fetch]
+allowed = ["subresource.budget_exceeded", "subresource.refused", "subresource.ssrf_blocked", "sniff.mime_mismatch"]
+
+[[sample]]
+name = "whatwg-html-introduction.html"
+set = "benign"
+category = "specification"
+source = "https://html.spec.whatwg.org/multipage/introduction.html"
+licence = "CC BY 4.0"
+carries = "site scripts and escaped markup examples"
+status = ["sanitised"]
+rules = []
+allowed = ["html.script.disallowed"]
+
+[sample.fetch]
+allowed = ["subresource.budget_exceeded", "subresource.refused", "subresource.ssrf_blocked", "sniff.mime_mismatch"]
+
+[[sample]]
+name = "cern-first-web-page.html"
+set = "benign"
+category = "historic"
+source = "https://info.cern.ch/hypertext/WWW/TheProject.html"
+licence = "CERN, publicly served since 1991"
+carries = "nothing, plain markup from 1991 with no head section"
+status = ["clean"]
+rules = []
+allowed = []
+
+[sample.fetch]
+allowed = ["subresource.budget_exceeded", "subresource.refused", "subresource.ssrf_blocked", "sniff.mime_mismatch"]
+
+[[sample]]
+name = "example-com.html"
+set = "benign"
+category = "minimal"
+source = "https://example.com/"
+licence = "IANA reserved example domain"
+carries = "an empty data URI used as the favicon"
+status = ["sanitised"]
+rules = []
+allowed = ["html.attr.dangerous_scheme"]
+
+[sample.fetch]
+allowed = ["subresource.budget_exceeded", "subresource.refused", "subresource.ssrf_blocked", "sniff.mime_mismatch"]
+
+[[sample]]
+name = "python-docs-json.html"
+set = "benign"
+category = "project-documentation"
+source = "https://docs.python.org/3/library/json.html"
+licence = "PSF licence"
+carries = "site scripts and theme-switch handlers"
+status = ["sanitised"]
+rules = []
+allowed = ["html.script.disallowed", "html.attr.event_handler"]
+
+[sample.fetch]
+allowed = ["subresource.budget_exceeded", "subresource.refused", "subresource.ssrf_blocked", "sniff.mime_mismatch"]
+
+[[sample]]
+name = "rust-book-ownership.html"
+set = "benign"
+category = "project-documentation"
+source = "https://doc.rust-lang.org/book/ch04-01-what-is-ownership.html"
+licence = "MIT OR Apache-2.0"
+carries = "site scripts"
+status = ["sanitised"]
+rules = []
+allowed = ["html.script.disallowed"]
+
+[sample.fetch]
+allowed = ["subresource.budget_exceeded", "subresource.refused", "subresource.ssrf_blocked", "sniff.mime_mismatch"]
+
+[[sample]]
+name = "postgresql-select.html"
+set = "benign"
+category = "project-documentation"
+source = "https://www.postgresql.org/docs/current/sql-select.html"
+licence = "PostgreSQL licence"
+carries = "site scripts"
+status = ["sanitised"]
+rules = []
+allowed = ["html.script.disallowed"]
+
+[sample.fetch]
+allowed = ["subresource.budget_exceeded", "subresource.refused", "subresource.ssrf_blocked", "sniff.mime_mismatch"]
+
+[[sample]]
+name = "apache-mod-core.html"
+set = "benign"
+category = "project-documentation"
+source = "https://httpd.apache.org/docs/2.4/mod/core.html"
+licence = "Apache-2.0"
+carries = "site scripts, a very long single-page reference"
+status = ["sanitised"]
+rules = []
+allowed = ["html.script.disallowed"]
+
+[sample.fetch]
+allowed = ["subresource.budget_exceeded", "subresource.refused", "subresource.ssrf_blocked", "sniff.mime_mismatch"]
+
+[[sample]]
+name = "django-forms.html"
+set = "benign"
+category = "project-documentation"
+source = "https://docs.djangoproject.com/en/5.0/topics/forms/"
+licence = "BSD-3-Clause"
+carries = "site scripts and escaped form markup in code blocks"
+status = ["sanitised"]
+rules = []
+allowed = ["html.script.disallowed"]
+
+[sample.fetch]
+allowed = ["subresource.budget_exceeded", "subresource.refused", "subresource.ssrf_blocked", "sniff.mime_mismatch"]
+
+[[sample]]
+name = "kernel-sysctl.html"
+set = "benign"
+category = "project-documentation"
+source = "https://www.kernel.org/doc/html/latest/admin-guide/sysctl/kernel.html"
+licence = "GPL-2.0 documentation"
+carries = "site scripts"
+status = ["sanitised"]
+rules = []
+allowed = ["html.script.disallowed"]
+
+[sample.fetch]
+allowed = ["subresource.budget_exceeded", "subresource.refused", "subresource.ssrf_blocked", "sniff.mime_mismatch"]
+
+[[sample]]
+name = "sqlite-select.html"
+set = "benign"
+category = "project-documentation"
+source = "https://sqlite.org/lang_select.html"
+licence = "public domain"
+carries = "inline SVG syntax diagrams, 141 real inline handlers that expand them, and two javascript: links used as buttons"
+status = ["sanitised"]
+rules = []
+allowed = ["html.script.disallowed", "html.attr.event_handler", "html.attr.dangerous_scheme"]
+
+[sample.fetch]
+allowed = ["subresource.budget_exceeded", "subresource.refused", "subresource.ssrf_blocked", "sniff.mime_mismatch"]
+
+[[sample]]
+name = "man7-open.html"
+set = "benign"
+category = "project-documentation"
+source = "https://man7.org/linux/man-pages/man2/open.2.html"
+licence = "man-pages licence, verbatim redistribution permitted"
+carries = "site scripts, preformatted manual text"
+status = ["sanitised"]
+rules = []
+allowed = ["html.script.disallowed"]
+
+[sample.fetch]
+allowed = ["subresource.budget_exceeded", "subresource.refused", "subresource.ssrf_blocked", "sniff.mime_mismatch"]
+
+[[sample]]
+name = "govuk-pet-pig.html"
+set = "benign"
+category = "government"
+source = "https://www.gov.uk/guidance/keeping-a-pet-pig-or-micropig"
+licence = "Open Government Licence v3.0"
+carries = "site scripts and analytics"
+status = ["sanitised"]
+rules = []
+allowed = ["html.script.disallowed"]
+
+[sample.fetch]
+allowed = ["subresource.budget_exceeded", "subresource.refused", "subresource.ssrf_blocked", "sniff.mime_mismatch"]
+
+[[sample]]
+name = "usa-gov-home.html"
+set = "benign"
+category = "government"
+source = "https://www.usa.gov/"
+licence = "US government work, public domain"
+carries = "site scripts and analytics"
+status = ["sanitised"]
+rules = []
+allowed = ["html.script.disallowed"]
+
+[sample.fetch]
+allowed = ["subresource.budget_exceeded", "subresource.refused", "subresource.ssrf_blocked", "sniff.mime_mismatch"]
+
+[[sample]]
+name = "nasa-humans-in-space.html"
+set = "benign"
+category = "government"
+source = "https://www.nasa.gov/humans-in-space/"
+licence = "US government work, public domain"
+carries = "34 scripts, a tag-manager iframe, YouTube embeds and three inline handlers"
+status = ["sanitised"]
+rules = []
+allowed = ["html.script.disallowed", "html.frame.disallowed", "html.attr.event_handler"]
+
+[sample.fetch]
+allowed = ["subresource.budget_exceeded", "subresource.refused", "subresource.ssrf_blocked", "sniff.mime_mismatch"]
+
+[[sample]]
+name = "iana-reserved-domains.html"
+set = "benign"
+category = "reference"
+source = "https://www.iana.org/domains/reserved"
+licence = "IANA, freely available"
+carries = "site scripts"
+status = ["sanitised"]
+rules = []
+allowed = ["html.script.disallowed"]
+
+[sample.fetch]
+allowed = ["subresource.budget_exceeded", "subresource.refused", "subresource.ssrf_blocked", "sniff.mime_mismatch"]
+
+[[sample]]
+name = "ietf-rfc-process.html"
+set = "benign"
+category = "reference"
+source = "https://www.ietf.org/process/rfcs/"
+licence = "IETF Trust"
+carries = "site scripts"
+status = ["sanitised"]
+rules = []
+allowed = ["html.script.disallowed"]
+
+[sample.fetch]
+allowed = ["subresource.budget_exceeded", "subresource.refused", "subresource.ssrf_blocked", "sniff.mime_mismatch"]
+
+[[sample]]
+name = "gutenberg-tom-sawyer.html"
+set = "benign"
+category = "long-form"
+source = "https://www.gutenberg.org/cache/epub/74/pg74-images.html"
+licence = "public domain"
+carries = "nothing, a whole book as one document with inline styles only"
+status = ["clean"]
+rules = []
+allowed = []
+
+[sample.fetch]
+allowed = ["subresource.budget_exceeded", "subresource.refused", "subresource.ssrf_blocked", "sniff.mime_mismatch"]
+
+[[sample]]
+name = "commons-lighthouses.html"
+set = "benign"
+category = "media"
+source = "https://commons.wikimedia.org/wiki/Category:Lighthouses_in_Portugal"
+licence = "CC BY-SA 4.0"
+carries = "site scripts and a large image grid"
+status = ["sanitised"]
+rules = []
+allowed = ["html.script.disallowed"]
+
+[sample.fetch]
+allowed = ["subresource.budget_exceeded", "subresource.refused", "subresource.ssrf_blocked", "sniff.mime_mismatch"]
+
+[[sample]]
+name = "wikinews-main-page.html"
+set = "benign"
+category = "news"
+source = "https://en.wikinews.org/wiki/Main_Page"
+licence = "CC BY 2.5"
+carries = "site scripts and a dense front-page layout"
+status = ["sanitised"]
+rules = []
+allowed = ["html.script.disallowed"]
+
+[sample.fetch]
+allowed = ["subresource.budget_exceeded", "subresource.refused", "subresource.ssrf_blocked", "sniff.mime_mismatch"]
+
+[[sample]]
+name = "hacker-news-front.html"
+set = "benign"
+category = "news"
+source = "https://news.ycombinator.com/"
+licence = "quoted for research, retrieved unmodified"
+carries = "one script and a table-based layout of the kind written before CSS grids"
+status = ["sanitised"]
+rules = []
+allowed = ["html.script.disallowed"]
+
+[sample.fetch]
+allowed = ["subresource.budget_exceeded", "subresource.refused", "subresource.ssrf_blocked", "sniff.mime_mismatch"]
+
+[[sample]]
+name = "debian-home.html"
+set = "benign"
+category = "portal"
+source = "https://www.debian.org/"
+licence = "Debian web site, freely distributable"
+carries = "one language-selector handler and no scripts"
+status = ["sanitised"]
+rules = []
+allowed = ["html.attr.event_handler"]
+
+[sample.fetch]
+allowed = ["subresource.budget_exceeded", "subresource.refused", "subresource.ssrf_blocked", "sniff.mime_mismatch"]
+
+[[sample]]
+name = "danluu-simple-architectures.html"
+set = "benign"
+category = "blog"
+source = "https://danluu.com/simple-architectures/"
+licence = "quoted for research, retrieved unmodified"
+carries = "one script and an empty data URI"
+status = ["sanitised"]
+rules = []
+allowed = ["html.script.disallowed", "html.attr.dangerous_scheme"]
+
+[sample.fetch]
+allowed = ["subresource.budget_exceeded", "subresource.refused", "subresource.ssrf_blocked", "sniff.mime_mismatch"]
+
+[[sample]]
+name = "xkcd-comic.html"
+set = "benign"
+category = "blog"
+source = "https://xkcd.com/2385/"
+licence = "CC BY-NC 2.5"
+carries = "nothing, a small hand-written page"
+status = ["clean"]
+rules = []
+allowed = []
+
+[sample.fetch]
+allowed = ["subresource.budget_exceeded", "subresource.refused", "subresource.ssrf_blocked", "sniff.mime_mismatch"]
+
+[[sample]]
+name = "site-styles.css"
+set = "benign"
+category = "stylesheet"
+licence = "authored for this project"
+carries = "layout rules and a media query"
+status = ["clean"]
+rules = []
+allowed = []
+
+[sample.fetch]
+allowed = ["subresource.budget_exceeded", "subresource.refused", "subresource.ssrf_blocked", "sniff.mime_mismatch"]
+
+[[sample]]
+name = "site-app.js"
+set = "benign"
+category = "script"
+licence = "authored for this project"
+carries = "a small module with no network access"
+status = ["refused"]
+rules = []
+allowed = ["scan.script.active_type"]
+output = false
+
+[sample.fetch]
+allowed = ["subresource.budget_exceeded", "subresource.refused", "subresource.ssrf_blocked", "sniff.mime_mismatch"]
+
+[[sample]]
+name = "site-logo.svg"
+set = "benign"
+category = "vector-image"
+licence = "authored for this project"
+carries = "paths and a title, no script and no external reference"
+status = ["sanitised", "clean"]
+rules = []
+allowed = ["sniff.mime_mismatch"]
+
+[sample.fetch]
+allowed = ["subresource.budget_exceeded", "subresource.refused", "subresource.ssrf_blocked", "sniff.mime_mismatch"]
+
+[[sample]]
+name = "site-banner.png"
+set = "benign"
+category = "raster-image"
+licence = "authored for this project"
+carries = "a small well-formed image"
+status = ["clean"]
+rules = []
+allowed = []
+
+[sample.fetch]
+allowed = ["subresource.budget_exceeded", "subresource.refused", "subresource.ssrf_blocked", "sniff.mime_mismatch"]
+
+[[sample]]
+name = "site-report.pdf"
+set = "benign"
+category = "document"
+licence = "authored for this project"
+carries = "one page of text, no action and no embedded file"
+status = ["clean"]
+rules = []
+allowed = []
+
+[sample.fetch]
+allowed = ["subresource.budget_exceeded", "subresource.refused", "subresource.ssrf_blocked", "sniff.mime_mismatch"]
+
+[[sample]]
+name = "site-release.zip"
+set = "benign"
+category = "archive"
+licence = "authored for this project"
+carries = "two stored text entries"
+status = ["clean"]
+rules = []
+allowed = []
+
+[sample.fetch]
+allowed = ["subresource.budget_exceeded", "subresource.refused", "subresource.ssrf_blocked", "sniff.mime_mismatch"]
+
+[[sample]]
+name = "site-feed.xml"
+set = "benign"
+category = "feed"
+licence = "authored for this project"
+carries = "a channel with two items and no entity declaration"
+status = ["clean"]
+rules = []
+allowed = []
+
+[sample.fetch]
+allowed = ["subresource.budget_exceeded", "subresource.refused", "subresource.ssrf_blocked", "sniff.mime_mismatch"]
+
+[[sample]]
+name = "site-config.json"
+set = "benign"
+category = "data"
+licence = "authored for this project"
+carries = "a nested object of settings"
+status = ["clean"]
+rules = []
+allowed = []
+
+[sample.fetch]
+allowed = ["subresource.budget_exceeded", "subresource.refused", "subresource.ssrf_blocked", "sniff.mime_mismatch"]
+
+[[sample]]
+name = "apache-mod-core.html"
+set = "malicious"
+category = "xss"
+threat = "an inline script appended to the document body"
+status = ["sanitised"]
+rules = ["html.script.disallowed"]
+allowed = ["html.script.disallowed", "html.attr.event_handler", "html.attr.dangerous_scheme", "html.frame.disallowed", "html.meta.refresh", "url.normalised", "url.idn", "sniff.mime_mismatch"]
+forbidden = ["alert(1)"]
+
+[sample.fetch]
+allowed = ["subresource.budget_exceeded", "subresource.refused", "subresource.ssrf_blocked", "sniff.mime_mismatch"]
+
+[[sample]]
+name = "cern-first-web-page.html"
+set = "malicious"
+category = "xss"
+threat = "a script element pointing at an external origin"
+status = ["sanitised"]
+rules = ["html.script.disallowed"]
+allowed = ["html.script.disallowed", "html.attr.event_handler", "html.attr.dangerous_scheme", "html.frame.disallowed", "html.meta.refresh", "url.normalised", "url.idn", "sniff.mime_mismatch"]
+forbidden = ["evil.example/payload.js"]
+
+[sample.fetch]
+allowed = ["subresource.budget_exceeded", "subresource.refused", "subresource.ssrf_blocked", "sniff.mime_mismatch"]
+
+[[sample]]
+name = "commons-lighthouses.html"
+set = "malicious"
+category = "xss"
+threat = "an inline event handler on an image that always fails to load"
+status = ["sanitised"]
+rules = ["html.attr.event_handler"]
+allowed = ["html.script.disallowed", "html.attr.event_handler", "html.attr.dangerous_scheme", "html.frame.disallowed", "html.meta.refresh", "url.normalised", "url.idn", "sniff.mime_mismatch"]
+forbidden = ["onerror"]
+
+[sample.fetch]
+allowed = ["subresource.budget_exceeded", "subresource.refused", "subresource.ssrf_blocked", "sniff.mime_mismatch"]
+
+[[sample]]
+name = "danluu-simple-architectures.html"
+set = "malicious"
+category = "xss"
+threat = "an event handler hidden by casing and whitespace"
+status = ["sanitised"]
+rules = ["html.attr.event_handler"]
+allowed = ["html.script.disallowed", "html.attr.event_handler", "html.attr.dangerous_scheme", "html.frame.disallowed", "html.meta.refresh", "url.normalised", "url.idn", "sniff.mime_mismatch"]
+forbidden = ["OnMouseOver"]
+
+[sample.fetch]
+allowed = ["subresource.budget_exceeded", "subresource.refused", "subresource.ssrf_blocked", "sniff.mime_mismatch"]
+
+[[sample]]
+name = "debian-home.html"
+set = "malicious"
+category = "redirect"
+threat = "a meta refresh that navigates away from the sanitised page"
+status = ["sanitised"]
+rules = ["html.meta.refresh"]
+allowed = ["html.script.disallowed", "html.attr.event_handler", "html.attr.dangerous_scheme", "html.frame.disallowed", "html.meta.refresh", "url.normalised", "url.idn", "sniff.mime_mismatch"]
+forbidden = ["http-equiv"]
+
+[sample.fetch]
+allowed = ["subresource.budget_exceeded", "subresource.refused", "subresource.ssrf_blocked", "sniff.mime_mismatch"]
+
+[[sample]]
+name = "django-forms.html"
+set = "malicious"
+category = "active-document"
+threat = "an iframe embedding a third-party document"
+status = ["sanitised"]
+rules = ["html.frame.disallowed"]
+allowed = ["html.script.disallowed", "html.attr.event_handler", "html.attr.dangerous_scheme", "html.frame.disallowed", "html.meta.refresh", "url.normalised", "url.idn", "sniff.mime_mismatch"]
+forbidden = ["<iframe"]
+
+[sample.fetch]
+allowed = ["subresource.budget_exceeded", "subresource.refused", "subresource.ssrf_blocked", "sniff.mime_mismatch"]
+
+[[sample]]
+name = "example-com.html"
+set = "malicious"
+category = "active-document"
+threat = "an object element carrying a plugin document"
+status = ["sanitised"]
+rules = ["html.frame.disallowed"]
+allowed = ["html.script.disallowed", "html.attr.event_handler", "html.attr.dangerous_scheme", "html.frame.disallowed", "html.meta.refresh", "url.normalised", "url.idn", "sniff.mime_mismatch"]
+forbidden = ["<object"]
+
+[sample.fetch]
+allowed = ["subresource.budget_exceeded", "subresource.refused", "subresource.ssrf_blocked", "sniff.mime_mismatch"]
+
+[[sample]]
+name = "govuk-pet-pig.html"
+set = "malicious"
+category = "active-document"
+threat = "an embed element carrying a plugin document"
+status = ["sanitised"]
+rules = ["html.frame.disallowed"]
+allowed = ["html.script.disallowed", "html.attr.event_handler", "html.attr.dangerous_scheme", "html.frame.disallowed", "html.meta.refresh", "url.normalised", "url.idn", "sniff.mime_mismatch"]
+forbidden = ["<embed"]
+
+[sample.fetch]
+allowed = ["subresource.budget_exceeded", "subresource.refused", "subresource.ssrf_blocked", "sniff.mime_mismatch"]
+
+[[sample]]
+name = "gutenberg-tom-sawyer.html"
+set = "malicious"
+category = "xss"
+threat = "a link whose target is a javascript scheme"
+status = ["sanitised"]
+rules = ["html.attr.dangerous_scheme"]
+allowed = ["html.script.disallowed", "html.attr.event_handler", "html.attr.dangerous_scheme", "html.frame.disallowed", "html.meta.refresh", "url.normalised", "url.idn", "sniff.mime_mismatch"]
+forbidden = ["javascript:"]
+
+[sample.fetch]
+allowed = ["subresource.budget_exceeded", "subresource.refused", "subresource.ssrf_blocked", "sniff.mime_mismatch"]
+
+[[sample]]
+name = "hacker-news-front.html"
+set = "malicious"
+category = "xss"
+threat = "a data URL carrying a whole HTML document"
+status = ["sanitised"]
+rules = ["html.attr.dangerous_scheme"]
+allowed = ["html.script.disallowed", "html.attr.event_handler", "html.attr.dangerous_scheme", "html.frame.disallowed", "html.meta.refresh", "url.normalised", "url.idn", "sniff.mime_mismatch"]
+forbidden = ["data:text/html"]
+
+[sample.fetch]
+allowed = ["subresource.budget_exceeded", "subresource.refused", "subresource.ssrf_blocked", "sniff.mime_mismatch"]
+
+[[sample]]
+name = "iana-reserved-domains.html"
+set = "malicious"
+category = "xss"
+threat = "a javascript scheme spelled with HTML entities"
+status = ["sanitised"]
+rules = ["html.attr.dangerous_scheme"]
+allowed = ["html.script.disallowed", "html.attr.event_handler", "html.attr.dangerous_scheme", "html.frame.disallowed", "html.meta.refresh", "url.normalised", "url.idn", "sniff.mime_mismatch"]
+forbidden = ["&#106;avascript"]
+
+[sample.fetch]
+allowed = ["subresource.budget_exceeded", "subresource.refused", "subresource.ssrf_blocked", "sniff.mime_mismatch"]
+
+[[sample]]
+name = "ietf-rfc-process.html"
+set = "malicious"
+category = "xss"
+threat = "a vbscript scheme in a link target"
+status = ["sanitised"]
+rules = ["html.attr.dangerous_scheme"]
+allowed = ["html.script.disallowed", "html.attr.event_handler", "html.attr.dangerous_scheme", "html.frame.disallowed", "html.meta.refresh", "url.normalised", "url.idn", "sniff.mime_mismatch"]
+forbidden = ["vbscript:"]
+
+[sample.fetch]
+allowed = ["subresource.budget_exceeded", "subresource.refused", "subresource.ssrf_blocked", "sniff.mime_mismatch"]
+
+[[sample]]
+name = "kernel-sysctl.html"
+set = "malicious"
+category = "url-confusion"
+threat = "a base element repointing every relative link at another host"
+status = ["sanitised"]
+rules = ["url.blocklist"]
+allowed = ["html.script.disallowed", "html.attr.event_handler", "html.attr.dangerous_scheme", "html.frame.disallowed", "html.meta.refresh", "url.normalised", "url.idn", "sniff.mime_mismatch"]
+forbidden = ["evil.example"]
+
+[sample.fetch]
+allowed = ["subresource.budget_exceeded", "subresource.refused", "subresource.ssrf_blocked", "sniff.mime_mismatch"]
+
+[[sample]]
+name = "man7-open.html"
+set = "malicious"
+category = "blocklist"
+threat = "a link to a host the policy block-list names"
+status = ["sanitised"]
+rules = ["url.blocklist"]
+allowed = ["html.script.disallowed", "html.attr.event_handler", "html.attr.dangerous_scheme", "html.frame.disallowed", "html.meta.refresh", "url.normalised", "url.idn", "sniff.mime_mismatch"]
+
+[sample.fetch]
+allowed = ["subresource.budget_exceeded", "subresource.refused", "subresource.ssrf_blocked", "sniff.mime_mismatch"]
+
+[[sample]]
+name = "mdn-iframe.html"
+set = "malicious"
+category = "ssrf"
+threat = "a reference to the loopback interface of the sanitiser"
+status = ["sanitised"]
+rules = ["ssrf.loopback"]
+allowed = ["html.script.disallowed", "html.attr.event_handler", "html.attr.dangerous_scheme", "html.frame.disallowed", "html.meta.refresh", "url.normalised", "url.idn", "sniff.mime_mismatch"]
+forbidden = ["127.0.0.1:8080"]
+
+[sample.fetch]
+allowed = ["subresource.budget_exceeded", "subresource.refused", "subresource.ssrf_blocked", "sniff.mime_mismatch"]
+
+[[sample]]
+name = "mdn-script-element.html"
+set = "malicious"
+category = "ssrf"
+threat = "a reference to the cloud metadata address"
+status = ["sanitised"]
+rules = ["ssrf.link_local"]
+allowed = ["html.script.disallowed", "html.attr.event_handler", "html.attr.dangerous_scheme", "html.frame.disallowed", "html.meta.refresh", "url.normalised", "url.idn", "sniff.mime_mismatch"]
+forbidden = ["169.254.169.254"]
+
+[sample.fetch]
+allowed = ["subresource.budget_exceeded", "subresource.refused", "subresource.ssrf_blocked", "sniff.mime_mismatch"]
+
+[[sample]]
+name = "mdn-xss.html"
+set = "malicious"
+category = "ssrf"
+threat = "a reference into a private network range"
+status = ["sanitised"]
+rules = ["ssrf.private"]
+allowed = ["html.script.disallowed", "html.attr.event_handler", "html.attr.dangerous_scheme", "html.frame.disallowed", "html.meta.refresh", "url.normalised", "url.idn", "sniff.mime_mismatch"]
+forbidden = ["10.0.0.5"]
+
+[sample.fetch]
+allowed = ["subresource.budget_exceeded", "subresource.refused", "subresource.ssrf_blocked", "sniff.mime_mismatch"]
+
+[[sample]]
+name = "nasa-humans-in-space.html"
+set = "malicious"
+category = "url-confusion"
+threat = "a host spelled with characters that look like another host"
+status = ["sanitised"]
+rules = ["url.homograph"]
+allowed = ["html.script.disallowed", "html.attr.event_handler", "html.attr.dangerous_scheme", "html.frame.disallowed", "html.meta.refresh", "url.normalised", "url.idn", "sniff.mime_mismatch"]
+
+[sample.fetch]
+allowed = ["subresource.budget_exceeded", "subresource.refused", "subresource.ssrf_blocked", "sniff.mime_mismatch"]
+
+[[sample]]
+name = "postgresql-select.html"
+set = "malicious"
+category = "url-confusion"
+threat = "credentials embedded in a link so it reads as another host"
+status = ["sanitised"]
+rules = ["url.userinfo"]
+allowed = ["html.script.disallowed", "html.attr.event_handler", "html.attr.dangerous_scheme", "html.frame.disallowed", "html.meta.refresh", "url.normalised", "url.idn", "sniff.mime_mismatch"]
+forbidden = ["support@bank.example"]
+
+[sample.fetch]
+allowed = ["subresource.budget_exceeded", "subresource.refused", "subresource.ssrf_blocked", "sniff.mime_mismatch"]
+
+[[sample]]
+name = "python-docs-json.html"
+set = "malicious"
+category = "url-confusion"
+threat = "a malformed URL that no parser agrees on"
+status = ["sanitised"]
+rules = ["url.malformed"]
+allowed = ["html.script.disallowed", "html.attr.event_handler", "html.attr.dangerous_scheme", "html.frame.disallowed", "html.meta.refresh", "url.normalised", "url.idn", "sniff.mime_mismatch"]
+
+[sample.fetch]
+allowed = ["subresource.budget_exceeded", "subresource.refused", "subresource.ssrf_blocked", "sniff.mime_mismatch"]
+
+[[sample]]
+name = "rfc9110-http-semantics.html"
+set = "malicious"
+category = "xss"
+threat = "a script tag broken across casing and whitespace"
+status = ["sanitised"]
+rules = ["html.script.disallowed"]
+allowed = ["html.script.disallowed", "html.attr.event_handler", "html.attr.dangerous_scheme", "html.frame.disallowed", "html.meta.refresh", "url.normalised", "url.idn", "sniff.mime_mismatch"]
+forbidden = ["alert(2)"]
+
+[sample.fetch]
+allowed = ["subresource.budget_exceeded", "subresource.refused", "subresource.ssrf_blocked", "sniff.mime_mismatch"]
+
+[[sample]]
+name = "rust-book-ownership.html"
+set = "malicious"
+category = "xss"
+threat = "a script whose body is assembled at run time"
+status = ["sanitised"]
+rules = ["html.script.disallowed"]
+allowed = ["html.script.disallowed", "html.attr.event_handler", "html.attr.dangerous_scheme", "html.frame.disallowed", "html.meta.refresh", "url.normalised", "url.idn", "sniff.mime_mismatch"]
+forbidden = ["eval("]
+
+[sample.fetch]
+allowed = ["subresource.budget_exceeded", "subresource.refused", "subresource.ssrf_blocked", "sniff.mime_mismatch"]
+
+[[sample]]
+name = "sqlite-select.html"
+set = "malicious"
+category = "css"
+threat = "a style block using a legacy expression"
+status = ["refused", "sanitised"]
+rules = ["scan.css.expression"]
+allowed = ["html.script.disallowed", "html.attr.event_handler", "html.attr.dangerous_scheme", "html.frame.disallowed", "html.meta.refresh", "url.normalised", "url.idn", "sniff.mime_mismatch"]
+forbidden = ["expression("]
+
+[sample.fetch]
+allowed = ["subresource.budget_exceeded", "subresource.refused", "subresource.ssrf_blocked", "sniff.mime_mismatch"]
+
+[[sample]]
+name = "usa-gov-home.html"
+set = "malicious"
+category = "css"
+threat = "a style block importing a stylesheet from another origin"
+status = ["refused", "sanitised"]
+rules = ["scan.css.import"]
+allowed = ["html.script.disallowed", "html.attr.event_handler", "html.attr.dangerous_scheme", "html.frame.disallowed", "html.meta.refresh", "url.normalised", "url.idn", "sniff.mime_mismatch"]
+forbidden = ["@import"]
+
+[sample.fetch]
+allowed = ["subresource.budget_exceeded", "subresource.refused", "subresource.ssrf_blocked", "sniff.mime_mismatch"]
+
+[[sample]]
+name = "whatwg-html-introduction.html"
+set = "malicious"
+category = "css"
+threat = "a style block whose background is a javascript scheme"
+status = ["refused", "sanitised"]
+rules = ["scan.css.dangerous_scheme"]
+allowed = ["html.script.disallowed", "html.attr.event_handler", "html.attr.dangerous_scheme", "html.frame.disallowed", "html.meta.refresh", "url.normalised", "url.idn", "sniff.mime_mismatch"]
+
+[sample.fetch]
+allowed = ["subresource.budget_exceeded", "subresource.refused", "subresource.ssrf_blocked", "sniff.mime_mismatch"]
+
+[[sample]]
+name = "wikinews-main-page.html"
+set = "malicious"
+category = "css"
+threat = "a style block sending what the reader types to another origin"
+status = ["refused", "sanitised"]
+rules = ["scan.css.exfiltration"]
+allowed = ["html.script.disallowed", "html.attr.event_handler", "html.attr.dangerous_scheme", "html.frame.disallowed", "html.meta.refresh", "url.normalised", "url.idn", "sniff.mime_mismatch"]
+
+[sample.fetch]
+allowed = ["subresource.budget_exceeded", "subresource.refused", "subresource.ssrf_blocked", "sniff.mime_mismatch"]
+
+[[sample]]
+name = "wikipedia-athens-el.html"
+set = "malicious"
+category = "xss"
+threat = "an inline SVG carrying a script element"
+status = ["sanitised"]
+rules = ["html.script.disallowed"]
+allowed = ["html.script.disallowed", "html.attr.event_handler", "html.attr.dangerous_scheme", "html.frame.disallowed", "html.meta.refresh", "url.normalised", "url.idn", "sniff.mime_mismatch"]
+forbidden = ["alert(3)"]
+
+[sample.fetch]
+allowed = ["subresource.budget_exceeded", "subresource.refused", "subresource.ssrf_blocked", "sniff.mime_mismatch"]
+
+[[sample]]
+name = "wikipedia-cairo-ar.html"
+set = "malicious"
+category = "xss"
+threat = "an SVG load handler that runs without any interaction"
+status = ["sanitised"]
+rules = ["html.attr.event_handler"]
+allowed = ["html.script.disallowed", "html.attr.event_handler", "html.attr.dangerous_scheme", "html.frame.disallowed", "html.meta.refresh", "url.normalised", "url.idn", "sniff.mime_mismatch"]
+forbidden = ["onload"]
+
+[sample.fetch]
+allowed = ["subresource.budget_exceeded", "subresource.refused", "subresource.ssrf_blocked", "sniff.mime_mismatch"]
+
+[[sample]]
+name = "wikipedia-html-sanitization.html"
+set = "malicious"
+category = "dos"
+threat = "deeply nested markup that invites unbounded recursion"
+status = ["sanitised", "clean", "refused"]
+rules = []
+allowed = ["html.script.disallowed", "html.attr.event_handler", "html.attr.dangerous_scheme", "html.frame.disallowed", "html.meta.refresh", "url.normalised", "url.idn", "sniff.mime_mismatch"]
+max_duration_ms = 2000
+
+[sample.fetch]
+allowed = ["subresource.budget_exceeded", "subresource.refused", "subresource.ssrf_blocked", "sniff.mime_mismatch"]
+
+[[sample]]
+name = "wikipedia-http-status-codes.html"
+set = "malicious"
+category = "dos"
+threat = "one element carrying thousands of attributes"
+status = ["sanitised", "clean", "refused"]
+rules = []
+allowed = ["html.script.disallowed", "html.attr.event_handler", "html.attr.dangerous_scheme", "html.frame.disallowed", "html.meta.refresh", "url.normalised", "url.idn", "sniff.mime_mismatch"]
+max_duration_ms = 2000
+
+[sample.fetch]
+allowed = ["subresource.budget_exceeded", "subresource.refused", "subresource.ssrf_blocked", "sniff.mime_mismatch"]
+
+[[sample]]
+name = "wikipedia-petersburg-ru.html"
+set = "malicious"
+category = "robustness"
+threat = "a document truncated in the middle of a tag"
+status = ["sanitised", "clean"]
+rules = []
+allowed = ["html.script.disallowed", "html.attr.event_handler", "html.attr.dangerous_scheme", "html.frame.disallowed", "html.meta.refresh", "url.normalised", "url.idn", "sniff.mime_mismatch"]
+
+[sample.fetch]
+allowed = ["subresource.budget_exceeded", "subresource.refused", "subresource.ssrf_blocked", "sniff.mime_mismatch"]
+
+[[sample]]
+name = "wikipedia-tokyo-ja.html"
+set = "malicious"
+category = "robustness"
+threat = "byte sequences that are not valid UTF-8"
+status = ["sanitised", "clean"]
+rules = []
+allowed = ["html.script.disallowed", "html.attr.event_handler", "html.attr.dangerous_scheme", "html.frame.disallowed", "html.meta.refresh", "url.normalised", "url.idn", "sniff.mime_mismatch"]
+
+[sample.fetch]
+allowed = ["subresource.budget_exceeded", "subresource.refused", "subresource.ssrf_blocked", "sniff.mime_mismatch"]
+
+[[sample]]
+name = "xkcd-comic.html"
+set = "malicious"
+category = "dos"
+threat = "a page naming far more sub-resources than any budget allows"
+status = ["sanitised", "clean"]
+rules = []
+allowed = ["html.script.disallowed", "html.attr.event_handler", "html.attr.dangerous_scheme", "html.frame.disallowed", "html.meta.refresh", "url.normalised", "url.idn", "sniff.mime_mismatch"]
+max_duration_ms = 4000
+
+[sample.fetch]
+allowed = ["subresource.budget_exceeded", "subresource.refused", "subresource.ssrf_blocked", "sniff.mime_mismatch"]
+
+[[sample]]
+name = "site-styles.css"
+set = "malicious"
+category = "css"
+threat = "an expression and a cross-origin import added to the stylesheet"
+status = ["refused"]
+rules = ["scan.css.expression"]
+allowed = ["scan.css.import", "scan.css.dangerous_scheme"]
+output = false
+
+[sample.fetch]
+allowed = ["subresource.budget_exceeded", "subresource.refused", "subresource.ssrf_blocked", "sniff.mime_mismatch"]
+
+[[sample]]
+name = "site-app.js"
+set = "malicious"
+category = "mime-confusion"
+threat = "an HTML document served under a script name"
+status = ["sanitised", "refused"]
+rules = ["sniff.mime_mismatch"]
+allowed = ["html.script.disallowed", "scan.script.active_type"]
+
+[sample.fetch]
+allowed = ["subresource.budget_exceeded", "subresource.refused", "subresource.ssrf_blocked", "sniff.mime_mismatch"]
+
+[[sample]]
+name = "site-logo.svg"
+set = "malicious"
+category = "xss"
+threat = "a script element and a load handler inside the vector image"
+status = ["sanitised", "refused"]
+rules = []
+allowed = ["html.script.disallowed", "html.attr.event_handler", "sniff.mime_mismatch"]
+forbidden = ["alert(1)"]
+
+[sample.fetch]
+allowed = ["subresource.budget_exceeded", "subresource.refused", "subresource.ssrf_blocked", "sniff.mime_mismatch"]
+
+[[sample]]
+name = "site-banner.png"
+set = "malicious"
+category = "dos"
+threat = "an image header declaring dimensions no decoder should allocate"
+status = ["refused"]
+rules = ["scan.image.dimensions"]
+allowed = []
+output = false
+max_duration_ms = 2000
+
+[sample.fetch]
+allowed = ["subresource.budget_exceeded", "subresource.refused", "subresource.ssrf_blocked", "sniff.mime_mismatch"]
+
+[[sample]]
+name = "site-report.pdf"
+set = "malicious"
+category = "active-document"
+threat = "a document that runs script the moment it opens"
+status = ["refused"]
+rules = ["scan.pdf.active_content"]
+allowed = []
+output = false
+
+[sample.fetch]
+allowed = ["subresource.budget_exceeded", "subresource.refused", "subresource.ssrf_blocked", "sniff.mime_mismatch"]
+
+[[sample]]
+name = "site-release.zip"
+set = "malicious"
+category = "dos"
+threat = "an archive entry claiming a size its bytes cannot justify"
+status = ["refused"]
+rules = ["scan.zip.bomb_risk"]
+allowed = []
+output = false
+max_duration_ms = 4000
+
+[sample.fetch]
+allowed = ["subresource.budget_exceeded", "subresource.refused", "subresource.ssrf_blocked", "sniff.mime_mismatch"]
+
+[[sample]]
+name = "site-feed.xml"
+set = "malicious"
+category = "dos"
+threat = "nested entity definitions that expand without bound"
+status = ["refused"]
+rules = ["scan.xml.entity_expansion"]
+allowed = []
+output = false
+max_duration_ms = 2000
+
+[sample.fetch]
+allowed = ["subresource.budget_exceeded", "subresource.refused", "subresource.ssrf_blocked", "sniff.mime_mismatch"]
+
+[[sample]]
+name = "site-config.json"
+set = "malicious"
+category = "mime-confusion"
+threat = "an XML document with an external entity, served under a data name"
+status = ["refused", "sanitised"]
+rules = ["scan.xml.xxe"]
+allowed = ["sniff.mime_mismatch"]
+forbidden = ["/etc/passwd"]
+output = false
+
+[sample.fetch]
+allowed = ["subresource.budget_exceeded", "subresource.refused", "subresource.ssrf_blocked", "sniff.mime_mismatch"]
+

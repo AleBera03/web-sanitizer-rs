@@ -1,0 +1,14 @@
+[html]
+action_script = "allow"
+action_event_handler = "allow"
+action_dangerous_scheme = "allow"
+action_frame = "allow"
+action_meta_refresh = "allow"
+
+[urls]
+action_blocked = "allow"
+action_homograph = "allow"
+action_userinfo = "allow"
+action_internal = "allow"
+action_idn = "allow"
+action_normalised = "allow"
