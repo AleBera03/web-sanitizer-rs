@@ -60,11 +60,11 @@ pub struct FixtureServer {
 
 impl FixtureServer {
     pub fn start(latency: Duration) -> FixtureServer {
-        FixtureServer::start_on(latency, "127.0.0.1")
+        FixtureServer::start_on(latency, "127.0.0.1", "127.0.0.1")
     }
 
-    pub fn start_on(latency: Duration, host: &str) -> FixtureServer {
-        let listener = TcpListener::bind((host, 0)).expect("a loopback port is available");
+    pub fn start_on(latency: Duration, bind: &str, advertised: &str) -> FixtureServer {
+        let listener = TcpListener::bind((bind, 0)).expect("a loopback port is available");
         let port = listener
             .local_addr()
             .expect("the listener has an address")
@@ -96,7 +96,7 @@ impl FixtureServer {
         });
 
         FixtureServer {
-            base: format!("http://{host}:{port}"),
+            base: format!("http://{advertised}:{port}"),
             shared,
         }
     }

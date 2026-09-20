@@ -1,9 +1,15 @@
+use std::io;
+use std::net::{Ipv4Addr, SocketAddr};
 use std::time::Duration;
 
 use url::Url;
+use web_sanitizer::fetch::guard::resolver::{NameResolver, SystemResolver};
 use web_sanitizer::input::InputSource;
 
 use web_sanitizer::fixture::{FixtureServer, Resource};
+
+const BIND: Ipv4Addr = Ipv4Addr::LOCALHOST;
+pub const HOST: &str = "localhost";
 
 const ONE_PIXEL_PNG: [u8; 69] = [
     0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44, 0x52,
@@ -58,12 +64,11 @@ pub struct Origin {
 
 impl Origin {
     pub fn start() -> Origin {
-        let server = FixtureServer::start_on(LATENCY, "127.0.0.1");
+        let server = FixtureServer::start_on(LATENCY, &BIND.to_string(), HOST);
         server.fallback(by_extension);
         Origin { server }
     }
 
-    #[allow(dead_code)]
     pub fn requests(&self) -> usize {
         self.server.hits()
     }
@@ -80,6 +85,25 @@ impl Origin {
         self.server.route(&path, Resource::new(kind, body));
         let url = Url::parse(&self.server.url(&path)).expect("the fixture base is a valid URL");
         InputSource::Url(url)
+    }
+}
+
+// A name answers differently from one machine to the next: some spell
+// `localhost` as one address, others as both loopback families. The second
+// answer reaches the guard as a candidate the parent endpoint cannot exempt,
+// and the sub-resource is refused. The fixture name is therefore pinned here,
+// which leaves every SSRF check in place and only removes the ambiguity.
+#[derive(Debug, Default)]
+pub struct FixtureNames {
+    system: SystemResolver,
+}
+
+impl NameResolver for FixtureNames {
+    fn lookup(&self, host: &str, port: u16) -> io::Result<Vec<SocketAddr>> {
+        match host.eq_ignore_ascii_case(HOST) {
+            true => Ok(vec![SocketAddr::from((BIND, port))]),
+            false => self.system.lookup(host, port),
+        }
     }
 }
 
@@ -176,7 +200,7 @@ mod tests {
         match source {
             InputSource::Url(url) => {
                 assert!(url.as_str().ends_with("/corpus/a.html"), "{url}");
-                assert_eq!(url.host_str(), Some("127.0.0.1"));
+                assert_eq!(url.host_str(), Some(HOST));
             }
             _ => panic!("a published input is fetched by URL"),
         }

@@ -4,11 +4,13 @@ use std::time::{Duration, Instant};
 
 use web_sanitizer::Engine;
 use web_sanitizer::fetch::HttpFetcher;
+use web_sanitizer::fetch::guard::Guard;
 use web_sanitizer::input::InputSource;
 use web_sanitizer::policy::Policy;
 use web_sanitizer::report::InputStatus;
 
 use crate::error::{Result, XtaskError};
+use crate::served::FixtureNames;
 
 pub const BUILTIN: &str = "builtin";
 
@@ -38,12 +40,13 @@ pub fn declared_fetching(root: &Path, name: &str) -> Result<crate::paths::Fetchi
 }
 
 pub fn engine(policy: Policy) -> Result<Engine> {
-    let fetcher = Arc::new(
-        HttpFetcher::new(&policy.fetch, &policy.ssrf).map_err(|source| XtaskError::Policy {
-            path: std::path::PathBuf::from("<fetch client>"),
+    let guard = Guard::with_resolver(&policy.ssrf, Arc::new(FixtureNames::default())).map_err(
+        |source| XtaskError::Policy {
+            path: std::path::PathBuf::from("<ssrf guard>"),
             source,
-        })?,
-    );
+        },
+    )?;
+    let fetcher = Arc::new(HttpFetcher::with_guard(&policy.fetch, Arc::new(guard)));
     Engine::new(policy, fetcher).map_err(|source| XtaskError::Policy {
         path: std::path::PathBuf::from("<engine>"),
         source,

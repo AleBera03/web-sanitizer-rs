@@ -115,6 +115,7 @@ struct Measured {
     duration_us: u128,
     bytes_in: u64,
     bytes_out: u64,
+    requests: usize,
 }
 
 impl Measured {
@@ -142,7 +143,7 @@ impl Measured {
     }
 }
 
-fn measure(sample: &Sample, done: &Processed, fetching: bool) -> Measured {
+fn measure(sample: &Sample, done: &Processed, fetching: bool, requests: usize) -> Measured {
     let (accepted_status, required, justified, forbidden) =
         GroundTruth::expectation(sample, fetching);
     let status = done.status_label();
@@ -193,6 +194,7 @@ fn measure(sample: &Sample, done: &Processed, fetching: bool) -> Measured {
         duration_us: done.elapsed.as_micros(),
         bytes_in: done.bytes_in,
         bytes_out: done.bytes_out,
+        requests,
     }
 }
 
@@ -302,6 +304,7 @@ pub fn run(layout: &Layout, truth: &GroundTruth, run: Run) -> Result<Outcome> {
     let mut rows = Vec::new();
     let mut measured = Vec::new();
     for (path, sample) in truth.paths(layout.root(), run.set) {
+        let before = origin.as_ref().map(Origin::requests).unwrap_or(0);
         let done = match &origin {
             Some(origin) => {
                 let data = read(&path)?;
@@ -309,7 +312,8 @@ pub fn run(layout: &Layout, truth: &GroundTruth, run: Run) -> Result<Outcome> {
             }
             None => engine::process(&engine, &path),
         };
-        let item = measure(sample, &done, run.fetching.enabled());
+        let requests = origin.as_ref().map(Origin::requests).unwrap_or(0) - before;
+        let item = measure(sample, &done, run.fetching.enabled(), requests);
         rows.push(row(&item, sample, run.policy, run.fetching));
         measured.push(item);
     }
@@ -319,7 +323,7 @@ pub fn run(layout: &Layout, truth: &GroundTruth, run: Run) -> Result<Outcome> {
         .iter()
         .filter(|item| item.verdict().is_failure())
         .count();
-    let summary = summarise(run.set, &measured);
+    let summary = summarise(run.set, &measured, run.fetching.enabled());
 
     Ok(Outcome {
         samples: rows,
@@ -329,7 +333,7 @@ pub fn run(layout: &Layout, truth: &GroundTruth, run: Run) -> Result<Outcome> {
     })
 }
 
-fn summarise(set: SampleSet, measured: &[Measured]) -> Vec<SummaryRow> {
+fn summarise(set: SampleSet, measured: &[Measured], fetching: bool) -> Vec<SummaryRow> {
     let label = set.label().to_string();
     let total = measured.len();
     let mut summary = match set {
@@ -385,6 +389,17 @@ fn summarise(set: SampleSet, measured: &[Measured]) -> Vec<SummaryRow> {
             }]
         }
     };
+
+    if fetching {
+        let reached = measured.iter().filter(|m| m.requests > 1).count();
+        summary.push(SummaryRow {
+            metric: "fetch_coverage".to_string(),
+            set: label.clone(),
+            numerator: reached,
+            denominator: total,
+            rate: percentage(reached, total),
+        });
+    }
 
     let mut categories: BTreeMap<&str, (usize, usize)> = BTreeMap::new();
     for item in measured {
@@ -509,14 +524,17 @@ mod tests {
             &["html.script.disallowed"],
             Some("<p>ok"),
         );
-        assert_eq!(measure(&sample, &done, false).verdict(), Verdict::Detected);
+        assert_eq!(
+            measure(&sample, &done, false, 0).verdict(),
+            Verdict::Detected
+        );
     }
 
     #[test]
     fn a_rule_that_never_fired_is_a_miss() {
         let sample = sample(&["html.script.disallowed"], &[], &[]);
         let done = processed(InputStatus::Clean, &[], Some("<script>"));
-        let measured = measure(&sample, &done, false);
+        let measured = measure(&sample, &done, false, 0);
         assert_eq!(measured.verdict(), Verdict::Missed);
         assert_eq!(measured.missing, vec!["html.script.disallowed"]);
     }
@@ -529,7 +547,7 @@ mod tests {
             &["html.script.disallowed"],
             Some("still <SCRIPT> here"),
         );
-        let measured = measure(&sample, &done, false);
+        let measured = measure(&sample, &done, false, 0);
         assert_eq!(measured.verdict(), Verdict::Leaked);
         assert_eq!(measured.leaked, vec!["<script"]);
     }
@@ -538,7 +556,7 @@ mod tests {
     fn a_status_outside_the_accepted_list_is_a_miss() {
         let sample = sample(&[], &[], &[]);
         let done = processed(InputStatus::Clean, &[], Some("x"));
-        assert_eq!(measure(&sample, &done, false).verdict(), Verdict::Missed);
+        assert_eq!(measure(&sample, &done, false, 0).verdict(), Verdict::Missed);
     }
 
     #[test]
@@ -551,7 +569,7 @@ mod tests {
             &["html.script.disallowed"],
             Some("x"),
         );
-        assert_eq!(measure(&sample, &done, false).verdict(), Verdict::Clean);
+        assert_eq!(measure(&sample, &done, false, 0).verdict(), Verdict::Clean);
     }
 
     #[test]
@@ -564,7 +582,7 @@ mod tests {
             &["html.script.disallowed", "url.homograph"],
             Some("x"),
         );
-        let measured = measure(&sample, &done, false);
+        let measured = measure(&sample, &done, false, 0);
         assert_eq!(measured.verdict(), Verdict::FalsePositive);
         assert_eq!(measured.unexpected, vec!["url.homograph"]);
     }
@@ -576,7 +594,7 @@ mod tests {
         sample.preserved = vec!["&lt;script".into()];
         let done = processed(InputStatus::Sanitised, &[], Some("nothing left"));
         assert_eq!(
-            measure(&sample, &done, false).verdict(),
+            measure(&sample, &done, false, 0).verdict(),
             Verdict::FalsePositive
         );
     }
@@ -585,7 +603,7 @@ mod tests {
     fn a_missing_output_where_one_was_expected_is_a_miss() {
         let sample = sample(&[], &[], &[]);
         let done = processed(InputStatus::Sanitised, &[], None);
-        assert_eq!(measure(&sample, &done, false).verdict(), Verdict::Missed);
+        assert_eq!(measure(&sample, &done, false, 0).verdict(), Verdict::Missed);
     }
 
     #[test]
@@ -597,11 +615,13 @@ mod tests {
             &benign,
             &processed(InputStatus::Sanitised, &["url.homograph"], Some("x")),
             false,
+            0,
         );
         let on_malicious = measure(
             &sample(&[], &[], &[]),
             &processed(InputStatus::Sanitised, &["url.homograph"], Some("x")),
             false,
+            0,
         );
         let rows = confusion(&[on_benign, on_malicious]);
         let rule = rows.iter().find(|r| r.rule == "url.homograph").unwrap();
@@ -615,11 +635,13 @@ mod tests {
             &sample(&["a"], &[], &[]),
             &processed(InputStatus::Sanitised, &["a"], Some("x")),
             false,
+            0,
         );
         let miss = measure(
             &sample(&["a"], &[], &[]),
             &processed(InputStatus::Sanitised, &[], Some("x")),
             false,
+            0,
         );
         let mut benign = sample(&[], &[], &[]);
         benign.set = SampleSet::Benign;
@@ -627,6 +649,7 @@ mod tests {
             &benign,
             &processed(InputStatus::Sanitised, &["b"], Some("x")),
             false,
+            0,
         );
         let rows = confusion(&[hit, miss, spurious]);
         let a = rows.iter().find(|r| r.rule == "a").unwrap();
